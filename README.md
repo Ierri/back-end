@@ -137,4 +137,4 @@ Configure `PORT=3001` e `FRONTEND_URL=http://localhost:3000` no `.env`, além do
 
 Login e cadastro gravam `ierri_session`, um cookie HttpOnly com validade de 15 minutos, `SameSite=Lax` e `Secure` em produção. `GET /auth/me` aceita esse cookie ou o header Bearer existente. `POST /auth/logout` limpa o cookie; tokens já emitidos continuam válidos até expirar. Requisições de mutação com origem não autorizada são rejeitadas.
 
-Em produção, use HTTPS e front-end/API no mesmo site para que o cookie `SameSite=Lax` seja enviado. Consulte `front-end/docs/auth.md` no workspace para o fluxo completo e as variáveis do front-end.
+Em produção, use HTTPS e front-end/API no mesmo site para que o cookie `SameSite=Lax` seja enviado.
