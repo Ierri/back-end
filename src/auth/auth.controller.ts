@@ -7,8 +7,11 @@ import {
   Inject,
   Post,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
+import { sessionCookieOptions, SESSION_COOKIE } from './session-cookie.js';
 import { AuthService } from './auth.service.js';
 import {
   checkEmailSchema,
@@ -33,15 +36,39 @@ export class AuthController {
 
   @ResponseMessage('Conta criada com sucesso.')
   @Post('register')
-  register(@Body({ schema: registerSchema }) body: RegisterDto) {
-    return this.auth.register(body);
+  async register(
+    @Body({ schema: registerSchema }) body: RegisterDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.auth.register(body);
+    response.cookie(SESSION_COOKIE, result.access_token, {
+      ...sessionCookieOptions(),
+      maxAge: result.expires_in * 1000,
+    });
+    return result;
   }
 
   @ResponseMessage('Login realizado com sucesso.')
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  login(@Body({ schema: loginSchema }) body: LoginDto) {
-    return this.auth.login(body);
+  async login(
+    @Body({ schema: loginSchema }) body: LoginDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.auth.login(body);
+    response.cookie(SESSION_COOKIE, result.access_token, {
+      ...sessionCookieOptions(),
+      maxAge: result.expires_in * 1000,
+    });
+    return result;
+  }
+
+  @ResponseMessage('Você saiu da sua conta.')
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  logout(@Res({ passthrough: true }) response: Response) {
+    response.clearCookie(SESSION_COOKIE, sessionCookieOptions());
+    return null;
   }
 
   @ResponseMessage('Usuário autenticado.')
