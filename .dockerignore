@@ -1,0 +1,16 @@
+.git
+.github
+node_modules
+dist
+.env*
+*.pem
+*.key
+*.tsbuildinfo
+coverage
+test
+docs
+README.md
+AGENTS.md
+CLAUDE.md
+npm-debug.log*
+bun-debug.log*
