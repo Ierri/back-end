@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import type { INestApplication } from '@nestjs/common';
 import { ApiHttpModule } from '../common/http/api-http.module.js';
+import { ApiException } from '../common/http/api.exception.js';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import mongoose from 'mongoose';
@@ -10,6 +11,7 @@ import { configureHttp } from '../common/http/configure-http.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
+import { SessoesService } from './sessoes.service.js';
 import { UsuariosService } from '../usuarios/usuarios.service.js';
 import { UsuarioSchema } from '../usuarios/schemas/usuario.schema.js';
 import type { UsuarioDocument } from '../usuarios/schemas/usuario.schema.js';
@@ -21,6 +23,34 @@ describe('Auth HTTP (isolated persistence)', () => {
   let app: INestApplication;
   let jwt: JwtService;
   const records = new Map<string, UsuarioDocument>();
+  const sessions = new Map<
+    string,
+    { userId: string; expiresAt: Date; revoked: boolean }
+  >();
+  const sessoes = {
+    create: vi.fn(async (id: string, userId: string, expiresAt: Date) => {
+      sessions.set(id, { userId, expiresAt, revoked: false });
+    }),
+    assertActive: vi.fn(async (id: string, userId: string) => {
+      const session = sessions.get(id);
+      if (
+        !session ||
+        session.userId !== userId ||
+        session.revoked ||
+        session.expiresAt <= new Date()
+      ) {
+        throw new ApiException('INVALID_TOKEN');
+      }
+    }),
+    revoke: vi.fn(async (id: string, userId: string) => {
+      const session = sessions.get(id);
+      if (!session || session.userId !== userId) return 'missing';
+      if (session.revoked) return 'already_revoked';
+      if (session.expiresAt <= new Date()) return 'expired';
+      session.revoked = true;
+      return 'revoked';
+    }),
+  };
   const usuarios = {
     findByEmail: vi.fn((email: string) => records.get(email) ?? null),
     findCredentials: vi.fn((email: string) => records.get(email) ?? null),
@@ -81,6 +111,7 @@ describe('Auth HTTP (isolated persistence)', () => {
       providers: [
         AuthService,
         JwtAuthGuard,
+        { provide: SessoesService, useValue: sessoes },
         { provide: UsuariosService, useValue: usuarios },
       ],
     }).compile();
@@ -91,6 +122,7 @@ describe('Auth HTTP (isolated persistence)', () => {
   });
   beforeEach(() => {
     records.clear();
+    sessions.clear();
     vi.clearAllMocks();
   });
   afterAll(async () => {
@@ -122,11 +154,16 @@ describe('Auth HTTP (isolated persistence)', () => {
       'exp',
       'iat',
       'iss',
+      'sid',
       'sub',
     ]);
     expect(payload.iss).toBe('ierri-api');
     expect(payload.aud).toBe('ierri-api');
     expect(payload.sub).toBe(stored._id.toString());
+    expect(sessions.get(payload.sid)).toMatchObject({
+      userId: payload.sub,
+      revoked: false,
+    });
     expect(payload.exp - payload.iat).toBe(900);
     stored.nome = 'Ana Atualizada';
     stored.avatar_url = '/avatar-atualizado.png';
@@ -152,10 +189,15 @@ describe('Auth HTTP (isolated persistence)', () => {
     const me = await agent.get('/auth/me').expect(200);
     expect(me.body.data.email).toBe(body.email);
     const logout = await agent.post('/auth/logout').send({}).expect(200);
+    expect(sessoes.revoke).toHaveBeenCalledOnce();
     expect(logout.headers['set-cookie'][0]).toContain(
       'Expires=Thu, 01 Jan 1970',
     );
     await agent.get('/auth/me').expect(401);
+    await request(app.getHttpServer())
+      .get('/auth/me')
+      .set('Authorization', `Bearer ${registration.body.data.access_token}`)
+      .expect(401);
     const login = await agent
       .post('/auth/login')
       .send({ email: body.email, password: body.password })
@@ -307,6 +349,149 @@ describe('Auth HTTP (isolated persistence)', () => {
       },
     });
     expect(unknown.body).toEqual(wrong.body);
+    expect(sessoes.create).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects missing, expired and revoked sessions despite a valid JWT', async () => {
+    const result = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send(body)
+      .expect(201);
+    const token = result.body.data.access_token;
+    const sid = (await jwt.verifyAsync<{ sid: string }>(token)).sid;
+    const callMe = () =>
+      request(app.getHttpServer())
+        .get('/auth/me')
+        .set('Authorization', `Bearer ${token}`);
+
+    sessions.delete(sid);
+    await callMe().expect(401);
+    sessions.set(sid, {
+      userId: records.get(body.email)!._id.toString(),
+      expiresAt: new Date(0),
+      revoked: false,
+    });
+    await callMe().expect(401);
+    sessions.get(sid)!.expiresAt = new Date(Date.now() + 60_000);
+    sessions.get(sid)!.revoked = true;
+    await callMe().expect(401);
+    sessions.get(sid)!.revoked = false;
+    sessions.get(sid)!.userId = new mongoose.Types.ObjectId().toString();
+    await callMe().expect(401);
+  });
+
+  it('clears missing, expired and already revoked sessions on logout', async () => {
+    const result = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send(body)
+      .expect(201);
+    const token = result.body.data.access_token;
+    const sid = (await jwt.verifyAsync<{ sid: string }>(token)).sid;
+    const logout = () =>
+      request(app.getHttpServer())
+        .post('/auth/logout')
+        .set('Authorization', `Bearer ${token}`)
+        .send({});
+
+    await logout().expect(200);
+    const repeated = await logout().expect(200);
+    expect(repeated.body.data).toBeNull();
+    expect(repeated.headers['set-cookie'][0]).toContain(
+      'Expires=Thu, 01 Jan 1970',
+    );
+    await request(app.getHttpServer())
+      .get('/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(401);
+
+    sessions.delete(sid);
+    await logout().expect(200);
+    sessions.set(sid, {
+      userId: records.get(body.email)!._id.toString(),
+      expiresAt: new Date(0),
+      revoked: false,
+    });
+    await logout().expect(200);
+    const absent = await request(app.getHttpServer())
+      .post('/auth/logout')
+      .send({})
+      .expect(200);
+    expect(absent.headers['set-cookie'][0]).toContain(
+      'Expires=Thu, 01 Jan 1970',
+    );
+  });
+
+  it('clears an expired JWT and rejects a forged token without hiding it', async () => {
+    const expired = await jwt.signAsync(
+      { sub: new mongoose.Types.ObjectId().toString(), sid: 'a'.repeat(43) },
+      { expiresIn: -1 },
+    );
+    const result = await request(app.getHttpServer())
+      .post('/auth/logout')
+      .set('Cookie', `ierri_session=${expired}`)
+      .send({})
+      .expect(200);
+    expect(result.headers['set-cookie'][0]).toContain(
+      'Expires=Thu, 01 Jan 1970',
+    );
+    expect(sessoes.revoke).not.toHaveBeenCalled();
+    const invalid = await request(app.getHttpServer())
+      .post('/auth/logout')
+      .set('Cookie', 'ierri_session=forged')
+      .send({})
+      .expect(401);
+    expect(invalid.body.error.code).toBe('INVALID_TOKEN');
+    expect(invalid.headers['set-cookie'][0]).toContain(
+      'Expires=Thu, 01 Jan 1970',
+    );
+  });
+
+  it('does not grant access when a registration session write fails', async () => {
+    sessoes.create.mockRejectedValueOnce(new Error('database unavailable'));
+    const result = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send(body)
+      .expect(500);
+    expect(result.headers['set-cookie']).toBeUndefined();
+    expect(records.has(body.email)).toBe(true);
+    await request(app.getHttpServer()).get('/auth/me').expect(401);
+  });
+
+  it('fails closed when session creation, lookup or revocation fails', async () => {
+    await request(app.getHttpServer())
+      .post('/auth/register')
+      .send(body)
+      .expect(201);
+    sessoes.create.mockRejectedValueOnce(new Error('database unavailable'));
+    const failedLogin = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: body.email, password: body.password })
+      .expect(500);
+    expect(failedLogin.headers['set-cookie']).toBeUndefined();
+    expect(sessions.size).toBe(1);
+
+    const login = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: body.email, password: body.password })
+      .expect(200);
+    const token = login.body.data.access_token;
+    sessoes.assertActive.mockRejectedValueOnce(
+      new Error('database unavailable'),
+    );
+    await request(app.getHttpServer())
+      .get('/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(500);
+    sessoes.revoke.mockRejectedValueOnce(new Error('database unavailable'));
+    const failedLogout = await request(app.getHttpServer())
+      .post('/auth/logout')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(500);
+    expect(failedLogout.headers['set-cookie']).toBeUndefined();
+    await request(app.getHttpServer())
+      .get('/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
   });
 
   it('rejects absent, forged, expired and malformed-subject tokens', async () => {
