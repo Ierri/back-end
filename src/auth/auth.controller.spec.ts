@@ -6,6 +6,7 @@ import { Test } from '@nestjs/testing';
 import mongoose from 'mongoose';
 import { compare } from 'bcryptjs';
 import request from 'supertest';
+import { configureHttp } from '../common/http/configure-http.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
@@ -84,6 +85,7 @@ describe('Auth HTTP (isolated persistence)', () => {
       ],
     }).compile();
     app = module.createNestApplication();
+    configureHttp(app);
     await app.init();
     jwt = module.get(JwtService);
   });
@@ -135,6 +137,60 @@ describe('Auth HTTP (isolated persistence)', () => {
     expect(me.body.data.id).toBe(stored._id.toString());
     expect(me.body.data.name).toBe('Ana Atualizada');
     expect(me.body.data.avatarUrl).toBe('/avatar-atualizado.png');
+  });
+
+  it('persists browser authentication with an HttpOnly cookie and clears it on logout', async () => {
+    const agent = request.agent(app.getHttpServer());
+    const registration = await agent
+      .post('/auth/register')
+      .send(body)
+      .expect(201);
+    const cookie = registration.headers['set-cookie'][0];
+    expect(cookie).toContain('HttpOnly');
+    expect(cookie).toContain('SameSite=Lax');
+    expect(cookie).toContain('Max-Age=900');
+    const me = await agent.get('/auth/me').expect(200);
+    expect(me.body.data.email).toBe(body.email);
+    const logout = await agent.post('/auth/logout').send({}).expect(200);
+    expect(logout.headers['set-cookie'][0]).toContain(
+      'Expires=Thu, 01 Jan 1970',
+    );
+    await agent.get('/auth/me').expect(401);
+    const login = await agent
+      .post('/auth/login')
+      .send({ email: body.email, password: body.password })
+      .expect(200);
+    expect(login.headers['set-cookie'][0]).toContain('HttpOnly');
+    await agent.get('/auth/me').expect(200);
+  });
+
+  it('allows the configured frontend with credentials and rejects foreign mutations', async () => {
+    const origin = (process.env.FRONTEND_URL ?? 'http://localhost:3000')
+      .split(',')[0]
+      .trim();
+    const preflight = await request(app.getHttpServer())
+      .options('/auth/login')
+      .set('Origin', origin)
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'content-type')
+      .expect(204);
+    expect(preflight.headers['access-control-allow-origin']).toBe(origin);
+    expect(preflight.headers['access-control-allow-credentials']).toBe('true');
+    await request(app.getHttpServer())
+      .post('/auth/logout')
+      .set('Origin', 'https://foreign.example')
+      .send({})
+      .expect(403);
+    await request(app.getHttpServer())
+      .post('/auth/logout')
+      .set('Sec-Fetch-Site', 'cross-site')
+      .send({})
+      .expect(403);
+    await request(app.getHttpServer())
+      .post('/auth/logout')
+      .set('Origin', origin)
+      .send({})
+      .expect(200);
   });
 
   it('normalizes names and appends numbers to existing usernames', async () => {

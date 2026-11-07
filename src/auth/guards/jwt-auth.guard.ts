@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { CanActivate, ExecutionContext } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import type { Request } from 'express';
+import { SESSION_COOKIE } from '../session-cookie.js';
 import { ApiException } from '../../common/http/api.exception.js';
 
 export type AuthenticatedRequest = Request & { authUserId: string };
@@ -15,10 +16,16 @@ export class JwtAuthGuard implements CanActivate {
     const match = /^Bearer ([^\s]+)$/i.exec(
       request.headers.authorization ?? '',
     );
-    if (!match) throw new ApiException('TOKEN_REQUIRED');
+    const cookieToken = request.headers.cookie
+      ?.split(';')
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${SESSION_COOKIE}=`))
+      ?.slice(SESSION_COOKIE.length + 1);
+    const token = match?.[1] ?? cookieToken;
+    if (!token) throw new ApiException('TOKEN_REQUIRED');
 
     try {
-      const payload = await this.jwt.verifyAsync<{ sub: string }>(match[1], {
+      const payload = await this.jwt.verifyAsync<{ sub: string }>(token, {
         algorithms: ['HS256'],
         issuer: 'ierri-api',
         audience: 'ierri-api',

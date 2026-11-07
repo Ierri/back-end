@@ -130,3 +130,11 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 ## License
 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+
+## Integração de autenticação com o front-end
+
+Configure `PORT=3001` e `FRONTEND_URL=http://localhost:3000` no `.env`, além do banco e do segredo JWT descritos em `.env.example`. `FRONTEND_URL` aceita uma lista de origens separadas por vírgula. O CORS permite credenciais somente para essas origens.
+
+Login e cadastro gravam `ierri_session`, um cookie HttpOnly com validade de 15 minutos, `SameSite=Lax` e `Secure` em produção. `GET /auth/me` aceita esse cookie ou o header Bearer existente. `POST /auth/logout` limpa o cookie; tokens já emitidos continuam válidos até expirar. Requisições de mutação com origem não autorizada são rejeitadas.
+
+Em produção, use HTTPS e front-end/API no mesmo site para que o cookie `SameSite=Lax` seja enviado.
