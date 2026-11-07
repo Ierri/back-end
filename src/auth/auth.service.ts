@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { compare, hash } from 'bcryptjs';
@@ -5,12 +6,14 @@ import { UsuariosService } from '../usuarios/usuarios.service.js';
 import type { UsuarioDocument } from '../usuarios/schemas/usuario.schema.js';
 import type { CheckEmailDto, LoginDto, RegisterDto } from './dto/auth.dto.js';
 import { ApiException } from '../common/http/api.exception.js';
+import { SessoesService } from './sessoes.service.js';
 
 @Injectable()
 export class AuthService {
   constructor(
     @Inject(UsuariosService) private readonly usuarios: UsuariosService,
     @Inject(JwtService) private readonly jwt: JwtService,
+    @Inject(SessoesService) private readonly sessoes: SessoesService,
   ) {}
 
   async checkEmail({ email }: CheckEmailDto) {
@@ -57,10 +60,16 @@ export class AuthService {
   }
 
   private async authenticate(usuario: UsuarioDocument) {
+    const usuarioId = usuario._id.toString();
+    const id = randomBytes(32).toString('base64url');
+    const accessToken = await this.jwt.signAsync({ sub: usuarioId, sid: id });
+    const payload = this.jwt.decode<{ iat: number; exp: number }>(accessToken);
+    if (!payload?.exp || !payload.iat) throw new Error('Invalid signed token');
+    await this.sessoes.create(id, usuarioId, new Date(payload.exp * 1000));
     return {
-      access_token: await this.jwt.signAsync({ sub: usuario._id.toString() }),
+      access_token: accessToken,
       token_type: 'Bearer',
-      expires_in: 900,
+      expires_in: payload.exp - payload.iat,
       user: this.toPublicUser(usuario),
     };
   }
