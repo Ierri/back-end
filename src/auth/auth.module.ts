@@ -1,18 +1,16 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
-import { MongooseModule } from '@nestjs/mongoose';
 import { UsuariosModule } from '../usuarios/usuarios.module.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
-import { Sessao, SessaoSchema } from './schemas/sessao.schema.js';
+import { RedisSessionClient } from './redis-session.client.js';
 import { SessoesService } from './sessoes.service.js';
 
 @Module({
   imports: [
     UsuariosModule,
-    MongooseModule.forFeature([{ name: Sessao.name, schema: SessaoSchema }]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -34,7 +32,7 @@ import { SessoesService } from './sessoes.service.js';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtAuthGuard, SessoesService],
+  providers: [AuthService, JwtAuthGuard, SessoesService, RedisSessionClient],
   exports: [JwtAuthGuard],
 })
 export class AuthModule {}

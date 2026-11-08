@@ -1,104 +1,102 @@
 import { createHash } from 'node:crypto';
-import { Types } from 'mongoose';
-import type { Model } from 'mongoose';
-import { Sessao, SessaoSchema } from './schemas/sessao.schema.js';
+import { RedisSessionClient } from './redis-session.client.js';
 import { SessoesService } from './sessoes.service.js';
 
-const userId = new Types.ObjectId().toString();
+const userId = '507f1f77bcf86cd799439011';
 const sessionId = 'a'.repeat(43);
-const idHash = createHash('sha256').update(sessionId).digest('hex');
+const key = `ierri:test:session:${createHash('sha256').update(sessionId).digest('hex')}`;
 
 describe('SessoesService', () => {
-  const create = vi.fn();
-  const findOne = vi.fn();
-  const findOneAndUpdate = vi.fn();
+  const client = {
+    isReady: true,
+    set: vi.fn(),
+    get: vi.fn(),
+    eval: vi.fn(),
+  };
   const service = new SessoesService({
-    create,
-    findOne,
-    findOneAndUpdate,
-  } as unknown as Model<Sessao>);
+    client,
+    prefix: 'ierri:test:session:',
+  } as unknown as RedisSessionClient);
 
-  beforeEach(() => vi.clearAllMocks());
-
-  it('stores only a hash and uses the existing MongoDB connection', async () => {
-    const expiresAt = new Date(Date.now() + 60_000);
-    create.mockResolvedValueOnce({});
-    await service.create(sessionId, userId, expiresAt);
-    expect(create).toHaveBeenCalledWith({
-      id_hash: idHash,
-      usuario_id: new Types.ObjectId(userId),
-      expira_em: expiresAt,
-    });
-    expect(JSON.stringify(create.mock.calls[0])).not.toContain(sessionId);
-    expect(SessaoSchema.path('usuario_id').instance).toBe('ObjectId');
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client.isReady = true;
   });
 
-  it('checks ownership, revocation and expiration in the database query', async () => {
-    findOne.mockReturnValueOnce({ exec: vi.fn().mockResolvedValue({}) });
-    await service.assertActive(sessionId, userId);
-    expect(findOne).toHaveBeenCalledWith({
-      id_hash: idHash,
-      usuario_id: new Types.ObjectId(userId),
-      revogada_em: null,
-      expira_em: { $gt: expect.any(Date) },
+  it('stores the user under a hashed key with an expiring, unique value', async () => {
+    client.set.mockResolvedValueOnce('OK');
+    const expiresAt = new Date(Date.now() + 60_000);
+    await service.create(sessionId, userId, expiresAt);
+    expect(client.set).toHaveBeenCalledWith(key, userId, {
+      PX: expect.any(Number),
+      NX: true,
     });
-    findOne.mockReturnValueOnce({ exec: vi.fn().mockResolvedValue(null) });
+    const ttl = client.set.mock.calls[0][2].PX as number;
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(60_000);
+    expect(JSON.stringify(client.set.mock.calls[0])).not.toContain(sessionId);
+  });
+
+  it('does not create a session when Redis rejects the write or the JWT is expired', async () => {
+    client.set.mockResolvedValueOnce(null);
+    await expect(
+      service.create(sessionId, userId, new Date(Date.now() + 60_000)),
+    ).rejects.toThrow();
+    await expect(
+      service.create(sessionId, userId, new Date(0)),
+    ).rejects.toThrow();
+    expect(client.set).toHaveBeenCalledOnce();
+  });
+
+  it('allows only a session belonging to the JWT user', async () => {
+    client.get
+      .mockResolvedValueOnce(userId)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('another-user');
+    await expect(
+      service.assertActive(sessionId, userId),
+    ).resolves.toBeUndefined();
     await expect(service.assertActive(sessionId, userId)).rejects.toMatchObject(
       { status: 401 },
     );
+    await expect(service.assertActive(sessionId, userId)).rejects.toMatchObject(
+      { status: 401 },
+    );
+    expect(client.get).toHaveBeenCalledWith(key);
   });
 
-  it('revokes only an active matching session and classifies inactive sessions', async () => {
-    findOneAndUpdate.mockReturnValueOnce({
-      exec: vi.fn().mockResolvedValue({}),
-    });
+  it('revokes atomically without deleting a session belonging to another user', async () => {
+    client.eval.mockResolvedValueOnce(1).mockResolvedValueOnce(0);
     await expect(service.revoke(sessionId, userId)).resolves.toBe('revoked');
-    expect(findOneAndUpdate).toHaveBeenCalledWith(
-      {
-        id_hash: idHash,
-        usuario_id: new Types.ObjectId(userId),
-        revogada_em: null,
-        expira_em: { $gt: expect.any(Date) },
-      },
-      { $set: { revogada_em: expect.any(Date) } },
-      { new: true },
-    );
-    findOneAndUpdate.mockReturnValueOnce({
-      exec: vi.fn().mockResolvedValue(null),
-    });
-    findOne.mockReturnValueOnce({ exec: vi.fn().mockResolvedValue(null) });
     await expect(service.revoke(sessionId, userId)).resolves.toBe('missing');
-
-    for (const [record, status] of [
-      [
-        { revogada_em: new Date(), expira_em: new Date(Date.now() + 60_000) },
-        'already_revoked',
-      ],
-      [{ revogada_em: null, expira_em: new Date(0) }, 'expired'],
-    ] as const) {
-      findOneAndUpdate.mockReturnValueOnce({
-        exec: vi.fn().mockResolvedValue(null),
-      });
-      findOne.mockReturnValueOnce({ exec: vi.fn().mockResolvedValue(record) });
-      await expect(service.revoke(sessionId, userId)).resolves.toBe(status);
-    }
+    expect(client.eval.mock.calls[0][0]).toContain(
+      "redis.call('GET', KEYS[1]) == ARGV[1]",
+    );
+    expect(client.eval.mock.calls[0][1]).toEqual({
+      keys: [key],
+      arguments: [userId],
+    });
   });
 
-  it('does not turn a database failure into a successful logout', async () => {
-    findOneAndUpdate.mockReturnValueOnce({
-      exec: vi.fn().mockRejectedValue(new Error('unavailable')),
-    });
-    await expect(service.revoke(sessionId, userId)).rejects.toThrow(
-      'unavailable',
+  it('fails closed when Redis is unavailable', async () => {
+    client.isReady = false;
+    await expect(service.assertActive(sessionId, userId)).rejects.toThrow(
+      'Redis indisponível.',
     );
-    findOneAndUpdate.mockReturnValueOnce({
-      exec: vi.fn().mockResolvedValue(null),
-    });
-    findOne.mockReturnValueOnce({
-      exec: vi.fn().mockRejectedValue(new Error('unavailable')),
-    });
     await expect(service.revoke(sessionId, userId)).rejects.toThrow(
-      'unavailable',
+      'Redis indisponível.',
+    );
+    await expect(
+      service.create(sessionId, userId, new Date(Date.now() + 60_000)),
+    ).rejects.toThrow('Redis indisponível.');
+    client.isReady = true;
+    client.get.mockRejectedValueOnce(new Error('connection lost'));
+    await expect(service.assertActive(sessionId, userId)).rejects.toThrow(
+      'connection lost',
+    );
+    client.eval.mockRejectedValueOnce(new Error('connection lost'));
+    await expect(service.revoke(sessionId, userId)).rejects.toThrow(
+      'connection lost',
     );
   });
 });

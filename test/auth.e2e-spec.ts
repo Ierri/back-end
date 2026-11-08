@@ -5,46 +5,70 @@ import { getConnectionToken } from '@nestjs/mongoose';
 import { Test } from '@nestjs/testing';
 import type { Connection } from 'mongoose';
 import { Types } from 'mongoose';
+import { createClient } from 'redis';
 import request from 'supertest';
 import { configureHttp } from '../src/common/http/configure-http.js';
 import { AppModule } from '../src/app.module.js';
+import { RedisSessionClient } from '../src/auth/redis-session.client.js';
 
-const baseUri = process.env.MONGODB_URI;
+const baseMongoUri = process.env.MONGODB_URI;
+const baseRedisUrl = process.env.REDIS_URL;
+const originalPrefix = process.env.REDIS_SESSION_PREFIX;
 const secret = process.env.JWT_SECRET;
-const localUri = (() => {
-  if (!baseUri || !secret || Buffer.byteLength(secret) < 32) return null;
+const testConfig = (() => {
+  if (
+    !baseMongoUri ||
+    !baseRedisUrl ||
+    !secret ||
+    Buffer.byteLength(secret) < 32
+  )
+    return null;
   try {
-    const url = new URL(baseUri);
+    const mongo = new URL(baseMongoUri);
+    const redis = new URL(baseRedisUrl);
     if (
-      url.protocol !== 'mongodb:' ||
-      !['127.0.0.1', 'localhost'].includes(url.hostname)
+      mongo.protocol !== 'mongodb:' ||
+      !['127.0.0.1', 'localhost'].includes(mongo.hostname)
     )
       return null;
-    url.pathname = `/ierri_auth_test_${randomBytes(8).toString('hex')}`;
-    return url.toString();
+    if (
+      redis.protocol !== 'redis:' ||
+      !['127.0.0.1', 'localhost'].includes(redis.hostname)
+    )
+      return null;
+    const runId = randomBytes(8).toString('hex');
+    mongo.pathname = `/ierri_auth_test_${runId}`;
+    return {
+      mongoUri: mongo.toString(),
+      prefix: `ierri:e2e:session:${runId}:`,
+    };
   } catch {
     return null;
   }
 })();
 
-describe.runIf(localUri)('Auth HTTP with isolated MongoDB', () => {
+describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
   let app: INestApplication;
   let connection: Connection;
+  let sessionClient: RedisSessionClient;
+  const inspector = createClient({ url: baseRedisUrl });
   const body = {
     name: 'Ana Integração',
     email: 'ana.integracao@example.com',
     password: 'SenhaTeste123!',
   };
-
-  const sessionId = (token: string) => {
+  const sessionKey = (token: string) => {
     const payload = JSON.parse(
       Buffer.from(token.split('.')[1], 'base64url').toString(),
     ) as { sid: string };
-    return createHash('sha256').update(payload.sid).digest('hex');
+    return `${testConfig!.prefix}${createHash('sha256').update(payload.sid).digest('hex')}`;
   };
 
   beforeAll(async () => {
-    process.env.MONGODB_URI = localUri!;
+    process.env.MONGODB_URI = testConfig!.mongoUri;
+    process.env.REDIS_SESSION_PREFIX = testConfig!.prefix;
+    inspector.on('error', () => {});
+    await inspector.connect();
     const module = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -52,54 +76,59 @@ describe.runIf(localUri)('Auth HTTP with isolated MongoDB', () => {
     configureHttp(app);
     await app.init();
     connection = module.get<Connection>(getConnectionToken());
+    sessionClient = module.get(RedisSessionClient);
   });
 
   afterAll(async () => {
+    if (inspector.isReady) {
+      const keys = await inspector.keys(`${testConfig!.prefix}*`);
+      if (keys.length) await inspector.del(keys);
+      await inspector.close();
+    }
     if (connection?.db) await connection.db.dropDatabase();
     if (app) await app.close();
-    if (baseUri) process.env.MONGODB_URI = baseUri;
+    if (baseMongoUri) process.env.MONGODB_URI = baseMongoUri;
+    if (originalPrefix) process.env.REDIS_SESSION_PREFIX = originalPrefix;
+    else delete process.env.REDIS_SESSION_PREFIX;
   });
 
-  it('persists registration and login sessions, then revokes a token on logout', async () => {
+  it('persists users in MongoDB and expiring sessions in Redis', async () => {
     const agent = request.agent(app.getHttpServer());
     const registered = await agent
       .post('/auth/register')
       .send(body)
       .expect(201);
-    const firstToken = registered.body.data.access_token as string;
+    const token = registered.body.data.access_token as string;
     const user = await connection
       .db!.collection('usuarios')
       .findOne({ email: body.email });
-    const session = await connection
-      .db!.collection('sessoes')
-      .findOne({ id_hash: sessionId(firstToken) });
     expect(user).not.toBeNull();
-    expect(session?.usuario_id.toString()).toBe(user?._id.toString());
-    expect(session?.expira_em).toBeInstanceOf(Date);
-    expect(session?.criada_em).toBeInstanceOf(Date);
-    expect(JSON.stringify(session)).not.toContain(firstToken);
+    expect(await inspector.get(sessionKey(token))).toBe(user?._id.toString());
+    const ttl = await inspector.pTTL(sessionKey(token));
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(900_000);
+    expect(await inspector.get(sessionKey(token))).not.toContain(token);
     await agent.get('/auth/me').expect(200);
+    expect(await inspector.pTTL(sessionKey(token))).toBeLessThanOrEqual(ttl);
+  });
 
-    const login = await agent
+  it('creates a login session, revokes it and rejects token reuse', async () => {
+    const login = await request(app.getHttpServer())
       .post('/auth/login')
       .send({ email: body.email, password: body.password })
       .expect(200);
     const token = login.body.data.access_token as string;
-    expect(
-      await connection
-        .db!.collection('sessoes')
-        .findOne({ id_hash: sessionId(token) }),
-    ).not.toBeNull();
+    expect(await inspector.get(sessionKey(token))).toBeTypeOf('string');
     await request(app.getHttpServer())
       .get('/auth/me')
       .set('Authorization', `Bearer ${token}`)
       .expect(200);
-
-    await agent.post('/auth/logout').send({}).expect(200);
-    const revoked = await connection
-      .db!.collection('sessoes')
-      .findOne({ id_hash: sessionId(token) });
-    expect(revoked?.revogada_em).toBeInstanceOf(Date);
+    await request(app.getHttpServer())
+      .post('/auth/logout')
+      .set('Authorization', `Bearer ${token}`)
+      .send({})
+      .expect(200);
+    expect(await inspector.get(sessionKey(token))).toBeNull();
     await request(app.getHttpServer())
       .get('/auth/me')
       .set('Authorization', `Bearer ${token}`)
@@ -125,28 +154,24 @@ describe.runIf(localUri)('Auth HTTP with isolated MongoDB', () => {
         .set('Authorization', `Bearer ${token}`);
 
     const missing = await login();
-    await connection
-      .db!.collection('sessoes')
-      .deleteOne({ id_hash: sessionId(missing) });
+    await inspector.del(sessionKey(missing));
     await me(missing).expect(401);
 
     const expired = await login();
-    await connection
-      .db!.collection('sessoes')
-      .updateOne(
-        { id_hash: sessionId(expired) },
-        { $set: { expira_em: new Date(0) } },
-      );
+    await inspector.pExpire(sessionKey(expired), 1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
     await me(expired).expect(401);
 
     const foreign = await login();
-    await connection
-      .db!.collection('sessoes')
-      .updateOne(
-        { id_hash: sessionId(foreign) },
-        { $set: { usuario_id: new Types.ObjectId() } },
-      );
+    const otherUser = new Types.ObjectId().toString();
+    await inspector.set(sessionKey(foreign), otherUser, { PX: 60_000 });
     await me(foreign).expect(401);
+    await request(app.getHttpServer())
+      .post('/auth/logout')
+      .set('Authorization', `Bearer ${foreign}`)
+      .send({})
+      .expect(200);
+    expect(await inspector.get(sessionKey(foreign))).toBe(otherUser);
   });
 
   it('keeps public validation and invalid-login behavior', async () => {
@@ -154,14 +179,12 @@ describe.runIf(localUri)('Auth HTTP with isolated MongoDB', () => {
       .post('/auth/check-email')
       .send({ email: body.email })
       .expect(200);
-    const count = await connection.db!.collection('sessoes').countDocuments();
+    const count = (await inspector.keys(`${testConfig!.prefix}*`)).length;
     await request(app.getHttpServer())
       .post('/auth/login')
       .send({ email: body.email, password: 'wrong' })
       .expect(401);
-    expect(await connection.db!.collection('sessoes').countDocuments()).toBe(
-      count,
-    );
+    expect((await inspector.keys(`${testConfig!.prefix}*`)).length).toBe(count);
     const invalid = await request(app.getHttpServer())
       .post('/auth/login')
       .send({ email: 'invalid', password: '' })
@@ -174,51 +197,37 @@ describe.runIf(localUri)('Auth HTTP with isolated MongoDB', () => {
       .expect(200);
   });
 
-  it('fails closed when MongoDB rejects session writes', async () => {
+  it('fails closed when the Redis connection is unavailable', async () => {
     const login = await request(app.getHttpServer())
       .post('/auth/login')
       .send({ email: body.email, password: body.password })
       .expect(200);
     const token = login.body.data.access_token as string;
-    await connection.db!.command({
-      collMod: 'sessoes',
-      validator: {
-        $jsonSchema: {
-          bsonType: 'object',
-          required: ['integration_test_blocked'],
-        },
-      },
-      validationLevel: 'strict',
-    });
-    try {
-      const failedRegistration = await request(app.getHttpServer())
-        .post('/auth/register')
-        .send({ ...body, email: 'falha.integracao@example.com' })
-        .expect(500);
-      expect(failedRegistration.headers['set-cookie']).toBeUndefined();
-      expect(
-        await connection
-          .db!.collection('usuarios')
-          .findOne({ email: 'falha.integracao@example.com' }),
-      ).not.toBeNull();
-
-      const failedLogin = await request(app.getHttpServer())
-        .post('/auth/login')
-        .send({ email: body.email, password: body.password })
-        .expect(500);
-      expect(failedLogin.headers['set-cookie']).toBeUndefined();
-      const failedLogout = await request(app.getHttpServer())
-        .post('/auth/logout')
-        .set('Authorization', `Bearer ${token}`)
-        .send({})
-        .expect(500);
-      expect(failedLogout.headers['set-cookie']).toBeUndefined();
-      await request(app.getHttpServer())
-        .get('/auth/me')
-        .set('Authorization', `Bearer ${token}`)
-        .expect(200);
-    } finally {
-      await connection.db!.command({ collMod: 'sessoes', validator: {} });
-    }
+    sessionClient.client.destroy();
+    await request(app.getHttpServer())
+      .get('/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(500);
+    const failedLogin = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: body.email, password: body.password })
+      .expect(500);
+    expect(failedLogin.headers['set-cookie']).toBeUndefined();
+    const failedLogout = await request(app.getHttpServer())
+      .post('/auth/logout')
+      .set('Authorization', `Bearer ${token}`)
+      .send({})
+      .expect(500);
+    expect(failedLogout.headers['set-cookie']).toBeUndefined();
+    const failedRegistration = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send({ ...body, email: 'falha.redis@example.com' })
+      .expect(500);
+    expect(failedRegistration.headers['set-cookie']).toBeUndefined();
+    expect(
+      await connection.db!
+        .collection('usuarios')
+        .findOne({ email: 'falha.redis@example.com' }),
+    ).not.toBeNull();
   });
 });
