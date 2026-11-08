@@ -31,8 +31,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       MONGODB_URI: mongodb://127.0.0.1:27017/ierri_ci
+      REDIS_URL: redis://127.0.0.1:6379
+      REDIS_SESSION_PREFIX: "ierri:ci:session:"
       JWT_SECRET: ci-only-test-key-not-for-deployment-32-bytes
     steps:
       - name: Checkout

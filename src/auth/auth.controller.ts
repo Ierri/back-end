@@ -13,6 +13,7 @@ import {
 import type { Response } from 'express';
 import { sessionCookieOptions, SESSION_COOKIE } from './session-cookie.js';
 import { AuthService } from './auth.service.js';
+import { SessoesService } from './sessoes.service.js';
 import {
   checkEmailSchema,
   loginSchema,
@@ -22,10 +23,15 @@ import type { CheckEmailDto, LoginDto, RegisterDto } from './dto/auth.dto.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import type { AuthenticatedRequest } from './guards/jwt-auth.guard.js';
 import { ResponseMessage } from '../common/http/response-message.decorator.js';
+import { ApiException } from '../common/http/api.exception.js';
 
 @Controller('auth')
 export class AuthController {
-  constructor(@Inject(AuthService) private readonly auth: AuthService) {}
+  constructor(
+    @Inject(AuthService) private readonly auth: AuthService,
+    @Inject(JwtAuthGuard) private readonly guard: JwtAuthGuard,
+    @Inject(SessoesService) private readonly sessoes: SessoesService,
+  ) {}
 
   @ResponseMessage('Usuário encontrado.')
   @Post('check-email')
@@ -66,7 +72,23 @@ export class AuthController {
   @ResponseMessage('Você saiu da sua conta.')
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  logout(@Res({ passthrough: true }) response: Response) {
+  async logout(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    let session: { id: string; userId: string } | null;
+    try {
+      session = await this.guard.logoutSession(request);
+    } catch (error) {
+      if (
+        error instanceof ApiException &&
+        error.getStatus() === HttpStatus.UNAUTHORIZED
+      ) {
+        response.clearCookie(SESSION_COOKIE, sessionCookieOptions());
+      }
+      throw error;
+    }
+    if (session) await this.sessoes.revoke(session.id, session.userId);
     response.clearCookie(SESSION_COOKIE, sessionCookieOptions());
     return null;
   }
