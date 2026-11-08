@@ -51,19 +51,30 @@ jobs:
           cache-from: type=gha,scope=${{ inputs.target_environment }}
           cache-to: type=gha,mode=max,scope=${{ inputs.target_environment }}
 
-      - name: Verificar a API com MongoDB antes de publicar
+      - name: Verificar a API com MongoDB e Redis antes de publicar
         run: |
           cleanup() {
-            docker rm --force ierri-api-smoke ierri-mongo-smoke >/dev/null 2>&1 || true
+            STATUS=$?
+            if [ "$STATUS" -ne 0 ]; then
+              for CONTAINER in ierri-api-smoke ierri-mongo-smoke ierri-redis-smoke; do
+                echo "::group::Logs de $CONTAINER"
+                docker logs "$CONTAINER" 2>&1 || true
+                echo "::endgroup::"
+              done
+            fi
+            docker rm --force ierri-api-smoke ierri-mongo-smoke ierri-redis-smoke >/dev/null 2>&1 || true
             docker network rm ierri-smoke >/dev/null 2>&1 || true
+            exit "$STATUS"
           }
           trap cleanup EXIT
           docker network create ierri-smoke
-          docker run --detach --rm --name ierri-mongo-smoke --network ierri-smoke mongo:7
+          docker run --detach --name ierri-mongo-smoke --network ierri-smoke mongo:7
+          docker run --detach --name ierri-redis-smoke --network ierri-smoke redis:7.4-alpine
           SMOKE_JWT_SECRET=$(openssl rand -hex 32)
-          docker run --detach --rm --name ierri-api-smoke --network ierri-smoke \
+          docker run --detach --name ierri-api-smoke --network ierri-smoke \
             --publish 127.0.0.1:3100:3000 \
             --env MONGODB_URI=mongodb://ierri-mongo-smoke:27017/ierri_smoke \
+            --env REDIS_URL=redis://ierri-redis-smoke:6379 \
             --env JWT_SECRET="$SMOKE_JWT_SECRET" "$IMAGE_NAME:$IMAGE_TAG"
           curl --fail --silent --show-error --retry 30 --retry-delay 1 --retry-all-errors \
             --max-time 5 http://127.0.0.1:3100/ | jq --exit-status '.success == true'
