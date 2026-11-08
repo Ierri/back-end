@@ -1,0 +1,80 @@
+Project ierri_modelagem_usuarios {
+  database_type: 'MongoDB'
+  Note: '''
+    Modelo da coleção usuarios e sua relação com o catálogo de tecnologias.
+    Os campos marcados como propostos ainda não fazem parte da baseline implementada.
+    DBML é usado como notação visual; arrays e subdocumentos representam estruturas MongoDB.
+  '''
+}
+
+Enum visibilidade_perfil {
+  publico
+  privado
+}
+
+Enum papel_usuario {
+  usuario
+  moderador
+  administrador
+}
+
+Enum status_usuario {
+  ativo
+  bloqueado
+  excluido
+}
+
+Table usuarios [headercolor: #3B82F6, note: 'Coleção existente; campos de evolução estão identificados nas notas.'] {
+  _id ObjectId [pk, not null, note: 'Identificador imutável.']
+
+  nome string [not null, note: 'Baseline existente.']
+  email string [not null, unique, note: 'Baseline; normalizado em minúsculas.']
+  username string [not null, unique, note: 'Baseline; normalizado em minúsculas.']
+  senha_hash string [not null, note: 'Baseline; confidencial e nunca retornado publicamente.']
+
+  biografia string [note: 'Baseline; opcional.']
+  avatar_url string [note: 'Baseline; opcional. Guarda referência, não o arquivo.']
+
+  stack_ids ObjectId[] [note: 'Proposto; referências únicas e limitadas a tecnologias.']
+  visibilidade_perfil visibilidade_perfil [not null, default: 'publico', note: 'Proposto.']
+  papeis papel_usuario[] [not null, default: `['usuario']`, note: 'Proposto; valores únicos.']
+  status status_usuario [not null, default: 'ativo', note: 'Proposto.']
+
+  "contadores.publicacoes" int [not null, default: 0, note: 'Projeção proposta; valor não negativo.']
+  "contadores.seguidores" int [not null, default: 0, note: 'Projeção proposta; valor não negativo.']
+  "contadores.seguindo" int [not null, default: 0, note: 'Projeção proposta; valor não negativo.']
+  "contadores.score" int [not null, default: 0, note: 'Projeção proposta; pode ser negativo.']
+
+  email_verificado_em datetime [note: 'Proposto; nulo enquanto não houver verificação.']
+  termos_aceitos_em datetime [note: 'Proposto; deve acompanhar a versão aceita.']
+  versao_termos_aceita string [note: 'Proposto.']
+
+  criado_em datetime [not null, note: 'Baseline existente; imutável após criação.']
+  atualizado_em datetime [not null, note: 'Proposto.']
+  excluido_em datetime [note: 'Proposto; preenchido somente quando status for excluido.']
+
+  indexes {
+    email [unique, name: 'uq_usuarios_email']
+    username [unique, name: 'uq_usuarios_username']
+    (status, criado_em [desc]) [name: 'ix_usuarios_status_criado_em']
+    (papeis, status) [name: 'ix_usuarios_papeis_status']
+  }
+}
+
+Table tecnologias [headercolor: #10B981, note: 'Coleção proposta; catálogo compartilhado de stacks.'] {
+  _id ObjectId [pk, not null]
+  nome string [not null]
+  slug string [not null, unique]
+  categoria string
+  icone_url string
+  ativo boolean [not null, default: true]
+  criado_em datetime [not null]
+  atualizado_em datetime [not null]
+
+  indexes {
+    slug [unique, name: 'uq_tecnologias_slug']
+  }
+}
+
+Ref usuario_tecnologias: usuarios.stack_ids <> tecnologias._id
+

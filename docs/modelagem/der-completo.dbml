@@ -1,0 +1,320 @@
+Project ierri_modelagem_completa {
+  database_type: 'MongoDB'
+  Note: '''
+    Modelo lógico e físico proposto para o IR / Ierri.
+    DBML é usado como notação visual para coleções MongoDB.
+    publicacao_midias representa subdocumentos incorporados, não uma coleção física.
+    Relações polimórficas são documentadas por notas e validadas pela aplicação.
+  '''
+}
+
+Enum visibilidade_perfil {
+  publico
+  privado
+}
+
+Enum papel_usuario {
+  usuario
+  moderador
+  administrador
+}
+
+Enum status_usuario {
+  ativo
+  bloqueado
+  excluido
+}
+
+Enum tipo_midia {
+  imagem
+  video
+}
+
+Enum visibilidade_publicacao {
+  publico
+  seguidores
+}
+
+Enum status_publicacao {
+  processando
+  publicada
+  arquivada
+  oculta
+  excluida
+}
+
+Enum status_comentario {
+  publicado
+  excluido
+  oculto
+}
+
+Enum status_seguidor {
+  pendente
+  aceito
+}
+
+Enum tipo_notificacao {
+  post_commented
+  comment_replied
+  post_upvoted
+  follow_requested
+  user_followed
+  follow_accepted
+  post_trending
+}
+
+Enum entidade_notificacao {
+  publicacao
+  comentario
+  usuario
+}
+
+Enum alvo_denuncia {
+  publicacao
+  comentario
+  usuario
+}
+
+Enum motivo_denuncia {
+  spam
+  assedio
+  inapropriado
+  direitos_autorais
+  outro
+}
+
+Enum status_denuncia {
+  aberta
+  em_analise
+  resolvida
+  descartada
+}
+
+Enum status_outbox {
+  pendente
+  processado
+  falhou
+}
+
+Table usuarios [headercolor: #3B82F6, note: 'Coleção existente. Ver modelagem-usuarios.md para baseline e evolução.'] {
+  _id ObjectId [pk, not null]
+  nome string [not null]
+  email string [not null, unique]
+  username string [not null, unique]
+  senha_hash string [not null, note: 'Confidencial; ausente das leituras comuns.']
+  biografia string
+  avatar_url string
+  stack_ids ObjectId[] [note: 'Referências únicas e limitadas ao catálogo tecnologias.']
+  visibilidade_perfil visibilidade_perfil [not null, default: 'publico']
+  papeis papel_usuario[] [not null, default: `['usuario']`]
+  status status_usuario [not null, default: 'ativo']
+  "contadores.publicacoes" int [not null, default: 0, note: 'Projeção derivada.']
+  "contadores.seguidores" int [not null, default: 0, note: 'Projeção derivada.']
+  "contadores.seguindo" int [not null, default: 0, note: 'Projeção derivada.']
+  "contadores.score" int [not null, default: 0, note: 'Projeção derivada; pode ser negativo.']
+  email_verificado_em datetime
+  termos_aceitos_em datetime
+  versao_termos_aceita string
+  criado_em datetime [not null]
+  atualizado_em datetime [not null]
+  excluido_em datetime
+
+  indexes {
+    (status, criado_em [desc]) [name: 'ix_usuarios_status_criado_em']
+    (papeis, status) [name: 'ix_usuarios_papeis_status']
+  }
+}
+
+Table tecnologias [headercolor: #10B981, note: 'Catálogo compartilhado e controlado de stacks.'] {
+  _id ObjectId [pk, not null]
+  nome string [not null]
+  slug string [not null, unique]
+  categoria string
+  icone_url string
+  ativo boolean [not null, default: true]
+  criado_em datetime [not null]
+  atualizado_em datetime [not null]
+}
+
+Table publicacoes [headercolor: #8B5CF6, note: 'Agregado principal. O array midias é incorporado e limitado a 10 itens.'] {
+  _id ObjectId [pk, not null]
+  slug string [not null, unique]
+  autor_id ObjectId [not null]
+  conteudo string [not null]
+  midias object[] [not null, note: 'Subdocumentos descritos visualmente em publicacao_midias.']
+  visibilidade visibilidade_publicacao [not null, default: 'publico']
+  status status_publicacao [not null, default: 'processando']
+  "contadores.upvotes" int [not null, default: 0]
+  "contadores.downvotes" int [not null, default: 0]
+  "contadores.score" int [not null, default: 0, note: 'upvotes - downvotes']
+  "contadores.comentarios" int [not null, default: 0]
+  "contadores.salvamentos" int [not null, default: 0]
+  publicada_em datetime
+  editada_em datetime
+  criada_em datetime [not null]
+  atualizada_em datetime [not null]
+
+  indexes {
+    (autor_id, publicada_em [desc]) [name: 'ix_publicacoes_autor_publicada_em']
+    (status, visibilidade, publicada_em [desc]) [name: 'ix_publicacoes_feed']
+    (status, visibilidade, "contadores.score" [desc], publicada_em [desc]) [name: 'ix_publicacoes_ranking']
+  }
+}
+
+Table publicacao_midias [headercolor: #A78BFA, note: 'SUBDOCUMENTO incorporado em publicacoes.midias; não criar coleção separada.'] {
+  _id ObjectId [pk, not null]
+  publicacao_id ObjectId [not null, note: 'Apenas para expressar o vínculo no DER. Não é persistido dentro do subdocumento.']
+  tipo tipo_midia [not null]
+  url string [not null]
+  chave_storage string [not null]
+  mime_type string [not null]
+  tamanho_bytes long [not null]
+  largura int
+  altura int
+  duracao_segundos int
+  texto_alternativo string
+  ordem int [not null]
+}
+
+Table comentarios [headercolor: #F59E0B, note: 'Árvore limitada às profundidades 0, 1 e 2. Exclusão lógica preserva respostas.'] {
+  _id ObjectId [pk, not null]
+  publicacao_id ObjectId [not null]
+  autor_id ObjectId [not null]
+  comentario_pai_id ObjectId
+  comentario_raiz_id ObjectId
+  profundidade int [not null, default: 0, note: 'Somente 0, 1 ou 2.']
+  conteudo string [not null]
+  status status_comentario [not null, default: 'publicado']
+  editado_em datetime
+  criado_em datetime [not null]
+  atualizado_em datetime [not null]
+
+  indexes {
+    (publicacao_id, comentario_pai_id, criado_em) [name: 'ix_comentarios_publicacao_pai']
+    (comentario_raiz_id, criado_em) [name: 'ix_comentarios_raiz']
+    (autor_id, criado_em [desc]) [name: 'ix_comentarios_autor']
+  }
+}
+
+Table votos [headercolor: #EF4444, note: 'Um voto por usuário e publicação. Troca de voto atualiza o mesmo documento.'] {
+  _id ObjectId [pk, not null]
+  publicacao_id ObjectId [not null]
+  usuario_id ObjectId [not null]
+  valor int [not null, note: 'Somente 1 ou -1.']
+  criado_em datetime [not null]
+  atualizado_em datetime [not null]
+
+  indexes {
+    (publicacao_id, usuario_id) [unique, name: 'uq_votos_publicacao_usuario']
+  }
+}
+
+Table publicacoes_salvas [headercolor: #EC4899, note: 'Relação idempotente entre usuário e publicação.'] {
+  _id ObjectId [pk, not null]
+  usuario_id ObjectId [not null]
+  publicacao_id ObjectId [not null]
+  criado_em datetime [not null]
+
+  indexes {
+    (usuario_id, publicacao_id) [unique, name: 'uq_salvas_usuario_publicacao']
+    (usuario_id, criado_em [desc]) [name: 'ix_salvas_usuario_criado_em']
+  }
+}
+
+Table seguidores [headercolor: #06B6D4, note: 'Perfis privados criam relação pendente; apenas relações aceitas concedem acesso.'] {
+  _id ObjectId [pk, not null]
+  seguidor_id ObjectId [not null]
+  seguido_id ObjectId [not null]
+  status status_seguidor [not null]
+  solicitado_em datetime [not null]
+  aceito_em datetime
+  atualizado_em datetime [not null]
+
+  indexes {
+    (seguidor_id, seguido_id) [unique, name: 'uq_seguidores_par']
+    (seguido_id, status, solicitado_em [desc]) [name: 'ix_seguidores_recebidos']
+    (seguidor_id, status, atualizado_em [desc]) [name: 'ix_seguidores_enviados']
+  }
+}
+
+Table notificacoes [headercolor: #6366F1, note: 'Persistência durável. Upvotes podem ser agrupados; downvotes nunca geram notificação.'] {
+  _id ObjectId [pk, not null]
+  destinatario_id ObjectId [not null]
+  ator_id ObjectId
+  atores_preview_ids ObjectId[] [note: 'Lista pequena e limitada.']
+  quantidade_atores int [not null, default: 1]
+  tipo tipo_notificacao [not null]
+  entidade_tipo entidade_notificacao [not null]
+  entidade_id ObjectId [not null, note: 'Referência polimórfica validada pela aplicação.']
+  publicacao_id ObjectId
+  chave_agrupamento string [note: 'Não nula apenas em notificações agrupadas.']
+  metadados object [not null, note: 'Objeto pequeno, versionável e sem dados sensíveis.']
+  lida_em datetime
+  criada_em datetime [not null]
+  ultimo_evento_em datetime [not null]
+
+  indexes {
+    (destinatario_id, criada_em [desc]) [name: 'ix_notificacoes_destinatario_criada_em']
+    (destinatario_id, lida_em, criada_em [desc]) [name: 'ix_notificacoes_nao_lidas']
+    (destinatario_id, chave_agrupamento) [name: 'ix_notificacoes_agrupamento', note: 'Único e parcial quando chave_agrupamento existir.']
+  }
+}
+
+Table denuncias [headercolor: #DC2626, note: 'alvo_id é polimórfico e aponta para a coleção indicada por alvo_tipo.'] {
+  _id ObjectId [pk, not null]
+  denunciante_id ObjectId [not null]
+  alvo_tipo alvo_denuncia [not null]
+  alvo_id ObjectId [not null]
+  motivo motivo_denuncia [not null]
+  descricao string
+  status status_denuncia [not null, default: 'aberta']
+  moderador_id ObjectId
+  nota_resolucao string
+  criada_em datetime [not null]
+  resolvida_em datetime
+
+  indexes {
+    (status, criada_em) [name: 'ix_denuncias_fila']
+    (alvo_tipo, alvo_id) [name: 'ix_denuncias_alvo']
+    (denunciante_id, criada_em [desc]) [name: 'ix_denuncias_denunciante']
+  }
+}
+
+Table eventos_outbox [headercolor: #64748B, note: 'Eventos persistidos na mesma transação do agregado e processados de forma idempotente.'] {
+  _id ObjectId [pk, not null]
+  tipo string [not null]
+  agregado_tipo string [not null]
+  agregado_id ObjectId [not null, note: 'Referência polimórfica.']
+  payload object [not null]
+  status status_outbox [not null, default: 'pendente']
+  tentativas int [not null, default: 0]
+  criado_em datetime [not null]
+  processado_em datetime
+
+  indexes {
+    (status, criado_em) [name: 'ix_outbox_processamento']
+    (agregado_tipo, agregado_id, criado_em) [name: 'ix_outbox_agregado']
+    processado_em [name: 'ttl_outbox_processados', note: 'TTL opcional após prazo de retenção.']
+  }
+}
+
+Ref usuario_tecnologias: usuarios.stack_ids <> tecnologias._id
+Ref publicacao_autor: publicacoes.autor_id > usuarios._id
+Ref publicacao_midias_incorporadas: publicacao_midias.publicacao_id > publicacoes._id
+Ref comentario_publicacao: comentarios.publicacao_id > publicacoes._id
+Ref comentario_autor: comentarios.autor_id > usuarios._id
+Ref comentario_pai: comentarios.comentario_pai_id >? comentarios._id
+Ref comentario_raiz: comentarios.comentario_raiz_id >? comentarios._id
+Ref voto_publicacao: votos.publicacao_id > publicacoes._id
+Ref voto_usuario: votos.usuario_id > usuarios._id
+Ref salva_usuario: publicacoes_salvas.usuario_id > usuarios._id
+Ref salva_publicacao: publicacoes_salvas.publicacao_id > publicacoes._id
+Ref seguidor_origem: seguidores.seguidor_id > usuarios._id
+Ref seguidor_destino: seguidores.seguido_id > usuarios._id
+Ref notificacao_destinatario: notificacoes.destinatario_id > usuarios._id
+Ref notificacao_ator: notificacoes.ator_id >? usuarios._id
+Ref notificacao_publicacao: notificacoes.publicacao_id >? publicacoes._id
+Ref denuncia_denunciante: denuncias.denunciante_id > usuarios._id
+Ref denuncia_moderador: denuncias.moderador_id >? usuarios._id
+

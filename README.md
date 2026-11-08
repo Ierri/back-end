@@ -25,6 +25,10 @@
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
+## Documentação do projeto
+
+A modelagem de dados, o DER e o handoff para a equipe estão em [`docs/`](./docs/README.md).
+
 ## Project setup
 
 ```bash
