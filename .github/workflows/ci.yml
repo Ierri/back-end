@@ -43,7 +43,7 @@ jobs:
     env:
       MONGODB_URI: mongodb://127.0.0.1:27017/ierri_ci
       REDIS_URL: redis://127.0.0.1:6379
-      REDIS_SESSION_PREFIX: ierri:ci:session:
+      REDIS_SESSION_PREFIX: "ierri:ci:session:"
       JWT_SECRET: ci-only-test-key-not-for-deployment-32-bytes
     steps:
       - name: Checkout
