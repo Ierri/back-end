@@ -7,6 +7,7 @@ import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { RedisSessionClient } from './redis-session.client.js';
 import { SessoesService } from './sessoes.service.js';
+import { CheckEmailRateLimitService } from './check-email-rate-limit.service.js';
 
 @Module({
   imports: [
@@ -32,7 +33,13 @@ import { SessoesService } from './sessoes.service.js';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtAuthGuard, SessoesService, RedisSessionClient],
+  providers: [
+    AuthService,
+    JwtAuthGuard,
+    SessoesService,
+    RedisSessionClient,
+    CheckEmailRateLimitService,
+  ],
   exports: [JwtAuthGuard],
 })
 export class AuthModule {}
