@@ -14,6 +14,11 @@ export const API_ERRORS = {
     status: HttpStatus.CONFLICT,
     message: 'E-mail já cadastrado.',
   },
+  REGISTRATION_COMPLETED_SESSION_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message:
+      'Sua conta foi criada, mas não foi possível iniciar a sessão. Tente entrar novamente quando o serviço estiver disponível.',
+  },
   USER_ALREADY_EXISTS: {
     status: HttpStatus.CONFLICT,
     message: 'E-mail ou username já cadastrado.',

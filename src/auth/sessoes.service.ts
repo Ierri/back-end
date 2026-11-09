@@ -3,6 +3,12 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ApiException } from '../common/http/api.exception.js';
 import { RedisSessionClient } from './redis-session.client.js';
 
+export class SessionPersistenceError extends Error {
+  constructor() {
+    super('Não foi possível criar a sessão.');
+  }
+}
+
 @Injectable()
 export class SessoesService {
   constructor(
@@ -12,11 +18,18 @@ export class SessoesService {
   async create(id: string, usuarioId: string, expiraEm: Date) {
     const ttlMs = Math.floor(expiraEm.getTime() - Date.now());
     if (ttlMs <= 0) throw new Error('Sessão expirada.');
-    const result = await this.client.set(this.key(id), usuarioId, {
-      PX: ttlMs,
-      NX: true,
-    });
-    if (result !== 'OK') throw new Error('Não foi possível criar a sessão.');
+    const key = this.key(id);
+    let persisted: boolean;
+    try {
+      persisted =
+        (await this.client.set(key, usuarioId, {
+          PX: ttlMs,
+          NX: true,
+        })) === 'OK';
+    } catch {
+      throw new SessionPersistenceError();
+    }
+    if (!persisted) throw new SessionPersistenceError();
   }
 
   async assertActive(id: string, usuarioId: string) {

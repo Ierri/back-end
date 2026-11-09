@@ -11,7 +11,7 @@ import { configureHttp } from '../common/http/configure-http.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
-import { SessoesService } from './sessoes.service.js';
+import { SessionPersistenceError, SessoesService } from './sessoes.service.js';
 import { UsuariosService } from '../usuarios/usuarios.service.js';
 import { UsuarioSchema } from '../usuarios/schemas/usuario.schema.js';
 import type { UsuarioDocument } from '../usuarios/schemas/usuario.schema.js';
@@ -446,15 +446,64 @@ describe('Auth HTTP (isolated persistence)', () => {
     );
   });
 
-  it('does not grant access when a registration session write fails', async () => {
-    sessoes.create.mockRejectedValueOnce(new Error('database unavailable'));
+  it('reports a completed registration when session persistence fails', async () => {
+    sessoes.create.mockRejectedValueOnce(new SessionPersistenceError());
+    const result = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send(body)
+      .expect(503);
+    expect(result.body).toEqual({
+      success: false,
+      error: {
+        code: 'REGISTRATION_COMPLETED_SESSION_UNAVAILABLE',
+        message:
+          'Sua conta foi criada, mas não foi possível iniciar a sessão. Tente entrar novamente quando o serviço estiver disponível.',
+        details: [],
+      },
+    });
+    expect(result.headers['set-cookie']).toBeUndefined();
+    expect(records.has(body.email)).toBe(true);
+    expect(sessions.size).toBe(0);
+    expect(usuarios.create).toHaveBeenCalledOnce();
+    await request(app.getHttpServer()).get('/auth/me').expect(401);
+    await request(app.getHttpServer())
+      .post('/auth/register')
+      .send(body)
+      .expect(409);
+    const login = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: body.email, password: body.password })
+      .expect(200);
+    expect(login.body.data.user.email).toBe(body.email);
+    expect(login.headers['set-cookie'][0]).toContain('ierri_session=');
+  });
+
+  it('does not report a completed registration when user persistence fails', async () => {
+    usuarios.create.mockRejectedValueOnce(new Error('MongoDB unavailable'));
     const result = await request(app.getHttpServer())
       .post('/auth/register')
       .send(body)
       .expect(500);
+    expect(result.body.error.code).toBe('INTERNAL_ERROR');
+    expect(JSON.stringify(result.body)).not.toContain('access_token');
+    expect(result.headers['set-cookie']).toBeUndefined();
+    expect(records.has(body.email)).toBe(false);
+    expect(sessoes.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps unrelated failures out of the session-unavailable response', async () => {
+    const sign = vi
+      .spyOn(jwt, 'signAsync')
+      .mockRejectedValueOnce(new Error('signing failed'));
+    const result = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send(body)
+      .expect(500);
+    sign.mockRestore();
+    expect(result.body.error.code).toBe('INTERNAL_ERROR');
     expect(result.headers['set-cookie']).toBeUndefined();
     expect(records.has(body.email)).toBe(true);
-    await request(app.getHttpServer()).get('/auth/me').expect(401);
+    expect(sessoes.create).not.toHaveBeenCalled();
   });
 
   it('fails closed when session creation, lookup or revocation fails', async () => {

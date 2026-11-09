@@ -197,6 +197,45 @@ describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
       .expect(200);
   });
 
+  it('allows login after a registration session write fails', async () => {
+    const email = 'sessao.indisponivel@example.com';
+    const set = vi
+      .spyOn(sessionClient.client, 'set')
+      .mockRejectedValueOnce(new Error('connection lost'));
+    try {
+      const failedRegistration = await request(app.getHttpServer())
+        .post('/auth/register')
+        .send({ ...body, email })
+        .expect(503);
+      expect(failedRegistration.body).toEqual({
+        success: false,
+        error: {
+          code: 'REGISTRATION_COMPLETED_SESSION_UNAVAILABLE',
+          message:
+            'Sua conta foi criada, mas não foi possível iniciar a sessão. Tente entrar novamente quando o serviço estiver disponível.',
+          details: [],
+        },
+      });
+      expect(failedRegistration.headers['set-cookie']).toBeUndefined();
+      expect(JSON.stringify(failedRegistration.body)).not.toContain(
+        'access_token',
+      );
+    } finally {
+      set.mockRestore();
+    }
+    const user = await connection.db!
+      .collection('usuarios')
+      .findOne({ email });
+    expect(user).not.toBeNull();
+    const login = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email, password: body.password })
+      .expect(200);
+    expect(await inspector.get(sessionKey(login.body.data.access_token))).toBe(
+      user?._id.toString(),
+    );
+  });
+
   it('fails closed when the Redis connection is unavailable', async () => {
     const login = await request(app.getHttpServer())
       .post('/auth/login')
@@ -222,8 +261,12 @@ describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
     const failedRegistration = await request(app.getHttpServer())
       .post('/auth/register')
       .send({ ...body, email: 'falha.redis@example.com' })
-      .expect(500);
+      .expect(503);
+    expect(failedRegistration.body.error.code).toBe(
+      'REGISTRATION_COMPLETED_SESSION_UNAVAILABLE',
+    );
     expect(failedRegistration.headers['set-cookie']).toBeUndefined();
+    expect(JSON.stringify(failedRegistration.body)).not.toContain('access_token');
     expect(
       await connection.db!
         .collection('usuarios')

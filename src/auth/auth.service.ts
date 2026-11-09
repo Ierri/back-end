@@ -6,7 +6,7 @@ import { UsuariosService } from '../usuarios/usuarios.service.js';
 import type { UsuarioDocument } from '../usuarios/schemas/usuario.schema.js';
 import type { CheckEmailDto, LoginDto, RegisterDto } from './dto/auth.dto.js';
 import { ApiException } from '../common/http/api.exception.js';
-import { SessoesService } from './sessoes.service.js';
+import { SessionPersistenceError, SessoesService } from './sessoes.service.js';
 
 @Injectable()
 export class AuthService {
@@ -40,7 +40,14 @@ export class AuthService {
       email,
       senha_hash: await hash(password, 12),
     });
-    return this.authenticate(usuario);
+    try {
+      return await this.authenticate(usuario);
+    } catch (error) {
+      if (error instanceof SessionPersistenceError) {
+        throw new ApiException('REGISTRATION_COMPLETED_SESSION_UNAVAILABLE');
+      }
+      throw error;
+    }
   }
 
   async login({ email, password }: LoginDto) {
