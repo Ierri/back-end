@@ -7,6 +7,7 @@ import { OptionalAuthGuard } from './optional-auth.guard.js';
 import { PublicacoesController } from './publicacoes.controller.js';
 import { PublicacoesCursor } from './publicacoes.cursor.js';
 import { PublicacoesService } from './publicacoes.service.js';
+import { RequiredAuthGuard } from './required-auth.guard.js';
 import { Publicacao, PublicacaoSchema } from './schemas/publicacao.schema.js';
 
 @Module({
@@ -22,6 +23,7 @@ import { Publicacao, PublicacaoSchema } from './schemas/publicacao.schema.js';
     PublicacoesService,
     PublicacoesCursor,
     OptionalAuthGuard,
+    RequiredAuthGuard,
     { provide: MEDIA_VERIFIER, useClass: UnavailableMediaVerifier },
   ],
 })

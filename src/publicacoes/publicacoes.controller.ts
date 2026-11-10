@@ -11,7 +11,6 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import type { AuthenticatedRequest } from '../auth/guards/jwt-auth.guard.js';
 import { ResponseMessage } from '../common/http/response-message.decorator.js';
 import {
@@ -27,6 +26,7 @@ import type {
 } from './dto/publicacoes.dto.js';
 import { OptionalAuthGuard } from './optional-auth.guard.js';
 import { PublicacoesService } from './publicacoes.service.js';
+import { RequiredAuthGuard } from './required-auth.guard.js';
 
 @Controller('publicacoes')
 export class PublicacoesController {
@@ -36,7 +36,7 @@ export class PublicacoesController {
   ) {}
 
   @Post()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(RequiredAuthGuard)
   @ResponseMessage('Publicação criada com sucesso.')
   create(
     @Body({ schema: createPublicacaoSchema }) body: CreatePublicacaoDto,
@@ -66,7 +66,7 @@ export class PublicacoesController {
   }
 
   @Patch(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(RequiredAuthGuard)
   @ResponseMessage('Publicação atualizada com sucesso.')
   update(
     @Param('id', { schema: publicacaoIdSchema }) id: string,
@@ -77,7 +77,7 @@ export class PublicacoesController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(RequiredAuthGuard)
   @ResponseMessage('Publicação excluída com sucesso.')
   remove(
     @Param('id', { schema: publicacaoIdSchema }) id: string,
