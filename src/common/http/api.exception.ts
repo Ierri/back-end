@@ -34,6 +34,18 @@ export const API_ERRORS = {
     status: HttpStatus.UNAUTHORIZED,
     message: 'Token inválido ou expirado.',
   },
+  PUBLICACAO_NOT_FOUND: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'Publicação não encontrada.',
+  },
+  MEDIA_INVALID: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'As mídias informadas não foram validadas.',
+  },
+  MEDIA_VERIFICATION_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message: 'Não é possível validar mídias agora. Tente novamente mais tarde.',
+  },
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERRORS;
