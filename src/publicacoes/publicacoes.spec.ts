@@ -1,9 +1,11 @@
 import { Types, model } from 'mongoose';
 import type { Model } from 'mongoose';
+import type { ConfigService } from '@nestjs/config';
 import { ApiException } from '../common/http/api.exception.js';
 import { Usuario } from '../usuarios/schemas/usuario.schema.js';
 import {
   createPublicacaoSchema,
+  listPublicacoesSchema,
   publicacaoIdSchema,
   updatePublicacaoSchema,
 } from './dto/publicacoes.dto.js';
@@ -12,6 +14,7 @@ import {
   UnavailableMediaVerifier,
 } from './media-verifier.js';
 import type { MediaVerifier, VerifiedMedia } from './media-verifier.js';
+import { PublicacoesCursor } from './publicacoes.cursor.js';
 import { PublicacoesService } from './publicacoes.service.js';
 import { Publicacao, PublicacaoSchema } from './schemas/publicacao.schema.js';
 
@@ -50,8 +53,15 @@ function publication(overrides: Record<string, unknown> = {}) {
 }
 
 function query(value: unknown) {
-  const result = { exec: vi.fn().mockResolvedValue(value), select: vi.fn() };
+  const result = {
+    exec: vi.fn().mockResolvedValue(value),
+    select: vi.fn(),
+    sort: vi.fn(),
+    limit: vi.fn(),
+  };
   result.select.mockReturnValue(result);
+  result.sort.mockReturnValue(result);
+  result.limit.mockReturnValue(result);
   return result;
 }
 
@@ -67,16 +77,24 @@ function setup(verifier: MediaVerifier = new UnavailableMediaVerifier()) {
   const saved = publication();
   const publications = {
     create: vi.fn().mockResolvedValue(saved),
+    find: vi.fn().mockReturnValue(query([])),
     findOne: vi.fn().mockReturnValue(query(saved)),
     findOneAndUpdate: vi.fn().mockReturnValue(query(saved)),
   };
-  const users = { findById: vi.fn().mockReturnValue(query(author)) };
+  const users = {
+    findById: vi.fn().mockReturnValue(query(author)),
+    find: vi.fn().mockReturnValue(query([author])),
+  };
+  const cursor = new PublicacoesCursor({
+    getOrThrow: () => 'unit-test-secret-for-publication-cursors',
+  } as unknown as ConfigService);
   const service = new PublicacoesService(
     publications as unknown as Model<Publicacao>,
     users as unknown as Model<Usuario>,
     verifier,
+    cursor,
   );
-  return { service, publications, users, saved, author };
+  return { service, publications, users, saved, author, cursor };
 }
 
 function body() {
@@ -195,6 +213,54 @@ describe('publicações: validação', () => {
       updatePublicacaoSchema.safeParse({ midias: ['unverified'] }).success,
     ).toBe(false);
     expect(publicacaoIdSchema.safeParse('invalid').success).toBe(false);
+  });
+
+  it('validates list filters and page size', () => {
+    expect(listPublicacoesSchema.parse({})).toEqual({ limite: 20 });
+    expect(
+      listPublicacoesSchema.parse({
+        limite: '50',
+        autorId: authorId.toString(),
+      }),
+    ).toEqual({
+      limite: 50,
+      autorId: authorId.toString(),
+    });
+    for (const limite of ['0', '51', '-1', '1.5', 'abc', '']) {
+      expect(listPublicacoesSchema.safeParse({ limite }).success).toBe(false);
+    }
+    expect(
+      listPublicacoesSchema.safeParse({ autorId: 'invalid' }).success,
+    ).toBe(false);
+    expect(
+      listPublicacoesSchema.safeParse({ cursor: 'malformed' }).success,
+    ).toBe(false);
+    expect(listPublicacoesSchema.safeParse({ unknown: 'value' }).success).toBe(
+      false,
+    );
+  });
+
+  it('has indexes for public and author cursor queries', () => {
+    const indexes = PublicacaoSchema.indexes().map(([fields]) => fields);
+    expect(indexes).toContainEqual({
+      status: 1,
+      visibilidade: 1,
+      publicada_em: -1,
+      _id: -1,
+    });
+    expect(indexes).toContainEqual({
+      autor_id: 1,
+      status: 1,
+      publicada_em: -1,
+      _id: -1,
+    });
+    expect(indexes).toContainEqual({
+      autor_id: 1,
+      status: 1,
+      visibilidade: 1,
+      publicada_em: -1,
+      _id: -1,
+    });
   });
 });
 
@@ -330,5 +396,184 @@ describe('PublicacoesService', () => {
     await expect(
       service.remove(postId.toString(), new Types.ObjectId().toString()),
     ).rejects.toBeInstanceOf(ApiException);
+  });
+});
+
+describe('PublicacoesService list', () => {
+  const publishedAt = new Date('2026-11-09T12:00:00.000Z');
+  const ids = [
+    '00000000000000000000000a',
+    '00000000000000000000000b',
+    '00000000000000000000000c',
+  ];
+  const posts = ids.map((id) =>
+    publication({ _id: new Types.ObjectId(id), publicada_em: publishedAt }),
+  );
+
+  it('places a later publication first even when it was created earlier', async () => {
+    const { service, publications } = setup();
+    const publishedLater = publication({
+      _id: new Types.ObjectId(ids[0]),
+      criada_em: new Date('2026-11-09T09:00:00.000Z'),
+      publicada_em: new Date('2026-11-09T13:00:00.000Z'),
+    });
+    const createdLater = publication({
+      _id: new Types.ObjectId(ids[1]),
+      criada_em: new Date('2026-11-09T10:00:00.000Z'),
+      publicada_em: new Date('2026-11-09T12:00:00.000Z'),
+    });
+    const findQuery = query([]);
+    findQuery.exec.mockImplementation(async () => {
+      const sort = findQuery.sort.mock.calls[0][0] as Record<string, number>;
+      const field = Object.keys(sort)[0] as 'criada_em' | 'publicada_em';
+      return [publishedLater, createdLater].toSorted(
+        (left, right) =>
+          right[field]!.getTime() - left[field]!.getTime() ||
+          right._id.toString().localeCompare(left._id.toString()),
+      );
+    });
+    publications.find.mockReturnValueOnce(findQuery);
+
+    const result = await service.list({ limite: 20 });
+    expect(result.items.map((item) => item.id)).toEqual([ids[0], ids[1]]);
+    expect(findQuery.sort).toHaveBeenCalledWith({ publicada_em: -1, _id: -1 });
+  });
+
+  it('reads one extra document, sorts by publication date and id, and batches authors', async () => {
+    const { service, publications, users, cursor } = setup();
+    const firstQuery = query([posts[2], posts[1], posts[0]]);
+    const secondQuery = query([posts[0]]);
+    publications.find
+      .mockReturnValueOnce(firstQuery)
+      .mockReturnValueOnce(secondQuery);
+
+    const first = await service.list({ limite: 2 });
+    expect(first.items.map((item) => item.id)).toEqual([ids[2], ids[1]]);
+    expect(first.hasMore).toBe(true);
+    expect(first.nextCursor).toBeTruthy();
+    expect(firstQuery.sort).toHaveBeenCalledWith({ publicada_em: -1, _id: -1 });
+    expect(firstQuery.limit).toHaveBeenCalledWith(3);
+    expect(publications.find.mock.calls[0][0]).toEqual({
+      status: 'publicada',
+      visibilidade: 'publico',
+    });
+    expect(users.find).toHaveBeenCalledTimes(1);
+    expect(users.find.mock.calls[0][0]).toEqual({
+      _id: { $in: [authorId.toString()] },
+    });
+    expect(first.items[0].autor).not.toHaveProperty('email');
+    expect(first.items[0].midias[0]).not.toHaveProperty('chave_storage');
+
+    const position = cursor.decode(first.nextCursor!, {
+      authorId: null,
+      owner: false,
+    });
+    expect(position.id.toString()).toBe(ids[1]);
+    expect(position.publishedAt).toEqual(publishedAt);
+    const second = await service.list({ limite: 2, cursor: first.nextCursor! });
+    expect(second.items.map((item) => item.id)).toEqual([ids[0]]);
+    expect(second.hasMore).toBe(false);
+    expect(second.nextCursor).toBeNull();
+    expect(publications.find.mock.calls[1][0]).toEqual({
+      status: 'publicada',
+      visibilidade: 'publico',
+      $or: [
+        { publicada_em: { $lt: publishedAt } },
+        { publicada_em: publishedAt, _id: { $lt: new Types.ObjectId(ids[1]) } },
+      ],
+    });
+    expect(
+      new Set([...first.items, ...second.items].map((item) => item.id)).size,
+    ).toBe(3);
+  });
+
+  it('returns an empty page without loading authors', async () => {
+    const { service, users } = setup();
+    await expect(
+      service.list({ limite: 20, autorId: authorId.toString() }),
+    ).resolves.toEqual({
+      items: [],
+      nextCursor: null,
+      hasMore: false,
+    });
+    expect(users.find).not.toHaveBeenCalled();
+  });
+
+  it('pages through first, intermediate and last pages without duplicate ids', async () => {
+    const { service, publications } = setup();
+    const pageIds = ['a', 'b', 'c', 'd', 'e'].map(
+      (digit) => `00000000000000000000000${digit}`,
+    );
+    const pagePosts = pageIds.map((id) =>
+      publication({ _id: new Types.ObjectId(id), publicada_em: publishedAt }),
+    );
+    publications.find
+      .mockReturnValueOnce(query([pagePosts[4], pagePosts[3], pagePosts[2]]))
+      .mockReturnValueOnce(query([pagePosts[2], pagePosts[1], pagePosts[0]]))
+      .mockReturnValueOnce(query([pagePosts[0]]));
+
+    const first = await service.list({ limite: 2 });
+    const middle = await service.list({ limite: 2, cursor: first.nextCursor! });
+    const last = await service.list({ limite: 2, cursor: middle.nextCursor! });
+    expect([first.hasMore, middle.hasMore, last.hasMore]).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect(last.nextCursor).toBeNull();
+    const allIds = [...first.items, ...middle.items, ...last.items].map(
+      (item) => item.id,
+    );
+    expect(allIds).toEqual(pageIds.toReversed());
+    expect(new Set(allIds).size).toBe(5);
+    for (const [index, lastId] of [pageIds[3], pageIds[1]].entries()) {
+      expect(publications.find.mock.calls[index + 1][0].$or).toEqual([
+        { publicada_em: { $lt: publishedAt } },
+        {
+          publicada_em: publishedAt,
+          _id: { $lt: new Types.ObjectId(lastId) },
+        },
+      ]);
+    }
+  });
+
+  it('filters by author and allows restricted posts only to that authenticated author', async () => {
+    const { service, publications } = setup();
+    const query = { limite: 20, autorId: authorId.toString() };
+    await service.list(query);
+    expect(publications.find.mock.calls[0][0]).toEqual({
+      status: 'publicada',
+      autor_id: authorId,
+      visibilidade: 'publico',
+    });
+    await service.list(query, new Types.ObjectId().toString());
+    expect(publications.find.mock.calls[1][0]).toHaveProperty(
+      'visibilidade',
+      'publico',
+    );
+    await service.list(query, authorId.toString());
+    expect(publications.find.mock.calls[2][0]).toEqual({
+      status: 'publicada',
+      autor_id: authorId,
+    });
+  });
+
+  it('rejects an owner cursor for an anonymous or different author query', async () => {
+    const { service, cursor, publications } = setup();
+    const ownerCursor = cursor.encode(
+      { publishedAt, id: new Types.ObjectId(ids[0]) },
+      { authorId: authorId.toString(), owner: true },
+    );
+    await expect(
+      service.list({
+        limite: 20,
+        autorId: authorId.toString(),
+        cursor: ownerCursor,
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    await expect(
+      service.list({ limite: 20, cursor: ownerCursor }, authorId.toString()),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(publications.find).not.toHaveBeenCalled();
   });
 });

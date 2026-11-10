@@ -183,8 +183,20 @@ PublicacaoSchema.pre('validate', function () {
     );
   }
 });
-PublicacaoSchema.index({ autor_id: 1, publicada_em: -1 });
-PublicacaoSchema.index({ status: 1, visibilidade: 1, publicada_em: -1 });
+PublicacaoSchema.index({
+  status: 1,
+  visibilidade: 1,
+  publicada_em: -1,
+  _id: -1,
+});
+PublicacaoSchema.index({ autor_id: 1, status: 1, publicada_em: -1, _id: -1 });
+PublicacaoSchema.index({
+  autor_id: 1,
+  status: 1,
+  visibilidade: 1,
+  publicada_em: -1,
+  _id: -1,
+});
 PublicacaoSchema.index({
   status: 1,
   visibilidade: 1,

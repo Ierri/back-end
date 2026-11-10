@@ -5,6 +5,7 @@ import { Usuario, UsuarioSchema } from '../usuarios/schemas/usuario.schema.js';
 import { MEDIA_VERIFIER, UnavailableMediaVerifier } from './media-verifier.js';
 import { OptionalAuthGuard } from './optional-auth.guard.js';
 import { PublicacoesController } from './publicacoes.controller.js';
+import { PublicacoesCursor } from './publicacoes.cursor.js';
 import { PublicacoesService } from './publicacoes.service.js';
 import { Publicacao, PublicacaoSchema } from './schemas/publicacao.schema.js';
 
@@ -19,6 +20,7 @@ import { Publicacao, PublicacaoSchema } from './schemas/publicacao.schema.js';
   controllers: [PublicacoesController],
   providers: [
     PublicacoesService,
+    PublicacoesCursor,
     OptionalAuthGuard,
     { provide: MEDIA_VERIFIER, useClass: UnavailableMediaVerifier },
   ],

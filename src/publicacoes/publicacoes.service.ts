@@ -8,10 +8,12 @@ import { Usuario } from '../usuarios/schemas/usuario.schema.js';
 import type { UsuarioDocument } from '../usuarios/schemas/usuario.schema.js';
 import type {
   CreatePublicacaoDto,
+  ListPublicacoesDto,
   UpdatePublicacaoDto,
 } from './dto/publicacoes.dto.js';
 import { MEDIA_VERIFIER } from './media-verifier.js';
 import type { MediaVerifier } from './media-verifier.js';
+import { PublicacoesCursor } from './publicacoes.cursor.js';
 import {
   Publicacao,
   validPublicationMedia,
@@ -28,7 +30,67 @@ export class PublicacoesService {
     private readonly publicacoes: Model<Publicacao>,
     @InjectModel(Usuario.name) private readonly usuarios: Model<Usuario>,
     @Inject(MEDIA_VERIFIER) private readonly mediaVerifier: MediaVerifier,
+    @Inject(PublicacoesCursor) private readonly cursor: PublicacoesCursor,
   ) {}
+
+  async list(query: ListPublicacoesDto, viewerId?: string) {
+    const authorId = query.autorId?.toLowerCase() ?? null;
+    const scope = {
+      authorId,
+      owner: authorId !== null && authorId === viewerId?.toLowerCase(),
+    };
+    const position = query.cursor
+      ? this.cursor.decode(query.cursor, scope)
+      : null;
+    const filter = {
+      status: 'publicada' as const,
+      ...(authorId ? { autor_id: new Types.ObjectId(authorId) } : {}),
+      ...(!scope.owner ? { visibilidade: 'publico' as const } : {}),
+      ...(position
+        ? {
+            $or: [
+              { publicada_em: { $lt: position.publishedAt } },
+              { publicada_em: position.publishedAt, _id: { $lt: position.id } },
+            ],
+          }
+        : {}),
+    };
+    const found = await this.publicacoes
+      .find(filter)
+      .sort({ publicada_em: -1, _id: -1 })
+      .limit(query.limite + 1)
+      .exec();
+    const hasMore = found.length > query.limite;
+    const page = found.slice(0, query.limite);
+    const authorIds = [
+      ...new Set(page.map((post) => post.autor_id.toString())),
+    ];
+    const authors = authorIds.length
+      ? await this.usuarios
+          .find({ _id: { $in: authorIds } })
+          .select('nome username biografia avatar_url')
+          .exec()
+      : [];
+    const byId = new Map(
+      authors.map((author) => [author._id.toString(), author]),
+    );
+    const items = page.flatMap((post) => {
+      const author = byId.get(post.autor_id.toString());
+      return author ? [this.toResponse(post, author)] : [];
+    });
+    const last = page.at(-1);
+    return {
+      items,
+      nextCursor:
+        hasMore && last
+          ? this.cursor.encode(
+              { publishedAt: last.publicada_em!, id: last._id },
+              scope,
+            )
+          : null,
+      hasMore,
+    };
+  }
 
   async create(authorId: string, body: CreatePublicacaoDto) {
     const author = await this.usuarios

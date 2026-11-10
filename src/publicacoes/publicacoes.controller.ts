@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -15,11 +16,13 @@ import type { AuthenticatedRequest } from '../auth/guards/jwt-auth.guard.js';
 import { ResponseMessage } from '../common/http/response-message.decorator.js';
 import {
   createPublicacaoSchema,
+  listPublicacoesSchema,
   publicacaoIdSchema,
   updatePublicacaoSchema,
 } from './dto/publicacoes.dto.js';
 import type {
   CreatePublicacaoDto,
+  ListPublicacoesDto,
   UpdatePublicacaoDto,
 } from './dto/publicacoes.dto.js';
 import { OptionalAuthGuard } from './optional-auth.guard.js';
@@ -40,6 +43,16 @@ export class PublicacoesController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.publicacoes.create(request.authUserId, body);
+  }
+
+  @Get()
+  @UseGuards(OptionalAuthGuard)
+  @ResponseMessage('Publicações encontradas.')
+  list(
+    @Query({ schema: listPublicacoesSchema }) query: ListPublicacoesDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.publicacoes.list(query, request.authUserId);
   }
 
   @Get(':id')

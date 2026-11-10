@@ -36,5 +36,9 @@ describe('OptionalAuthGuard', () => {
     await expect(
       guard.canActivate(context({ authorization: 'Bearer invalid' })),
     ).rejects.toMatchObject({ status: 401 });
+    authenticate.mockRejectedValueOnce(new ApiException('INVALID_TOKEN'));
+    await expect(
+      guard.canActivate(context({ cookie: 'ierri_session=invalid' })),
+    ).rejects.toMatchObject({ status: 401 });
   });
 });
