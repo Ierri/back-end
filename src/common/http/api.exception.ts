@@ -10,9 +10,23 @@ export const API_ERRORS = {
     status: HttpStatus.NOT_FOUND,
     message: 'Usuário não encontrado.',
   },
+  CHECK_EMAIL_RATE_LIMITED: {
+    status: HttpStatus.TOO_MANY_REQUESTS,
+    message: 'Muitas consultas. Tente novamente mais tarde.',
+  },
+  CHECK_EMAIL_RATE_LIMIT_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message:
+      'Não foi possível verificar o e-mail agora. Tente novamente mais tarde.',
+  },
   EMAIL_ALREADY_EXISTS: {
     status: HttpStatus.CONFLICT,
     message: 'E-mail já cadastrado.',
+  },
+  REGISTRATION_COMPLETED_SESSION_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message:
+      'Sua conta foi criada, mas não foi possível iniciar a sessão. Tente entrar novamente quando o serviço estiver disponível.',
   },
   USER_ALREADY_EXISTS: {
     status: HttpStatus.CONFLICT,

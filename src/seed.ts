@@ -1,30 +1,25 @@
 import 'reflect-metadata';
 import 'dotenv/config';
 import mongoose from 'mongoose';
-import { hash } from 'bcryptjs';
 import { Usuario, UsuarioSchema } from './usuarios/schemas/usuario.schema.js';
+import {
+  buildSeedUser,
+  readSeedConfig,
+  SeedConfigurationError,
+} from './seed-config.js';
 
 async function seed() {
-  const uri = process.env.MONGODB_URI?.trim();
-  const password = '1234';
-
-  if (!uri) {
-    throw new Error('Defina MONGODB_URI no .env ou no ambiente.');
-  }
+  const config = readSeedConfig(process.env);
 
   try {
-    await mongoose.connect(uri, { serverSelectionTimeoutMS: 10000 });
+    await mongoose.connect(config.uri, {
+      directConnection: true,
+      serverSelectionTimeoutMS: 10000,
+    });
     const usuarios = mongoose.model(Usuario.name, UsuarioSchema);
     await usuarios.init();
 
-    const usuario = new usuarios({
-      nome: 'Admin',
-      email: 'admin@ierri.com.br',
-      username: 'admin',
-      senha_hash: await hash(password, 12),
-      biografia: 'Perfil fictício para desenvolvimento do Ierri.',
-      avatar_url: '/brand/ierri/social/github-avatar-512.png',
-    });
+    const usuario = new usuarios(await buildSeedUser(config));
     await usuario.validate();
 
     const result = await usuarios.updateOne(
@@ -44,9 +39,8 @@ async function seed() {
 }
 
 seed().catch((error: unknown) => {
-  // Avoid logging connection strings or credentials from database errors.
   const message =
-    error instanceof Error && error.message.startsWith('Defina ')
+    error instanceof SeedConfigurationError
       ? error.message
       : 'Verifique a conexão MongoDB, as permissões e conflitos nos índices únicos.';
   console.error(`Falha no seed: ${message}`);

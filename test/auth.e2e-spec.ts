@@ -14,6 +14,7 @@ import { RedisSessionClient } from '../src/auth/redis-session.client.js';
 const baseMongoUri = process.env.MONGODB_URI;
 const baseRedisUrl = process.env.REDIS_URL;
 const originalPrefix = process.env.REDIS_SESSION_PREFIX;
+const originalRatePrefix = process.env.REDIS_CHECK_EMAIL_RATE_PREFIX;
 const secret = process.env.JWT_SECRET;
 const testConfig = (() => {
   if (
@@ -41,6 +42,7 @@ const testConfig = (() => {
     return {
       mongoUri: mongo.toString(),
       prefix: `ierri:e2e:session:${runId}:`,
+      ratePrefix: `ierri:e2e:rate:check-email:${runId}:`,
     };
   } catch {
     return null;
@@ -67,6 +69,7 @@ describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
   beforeAll(async () => {
     process.env.MONGODB_URI = testConfig!.mongoUri;
     process.env.REDIS_SESSION_PREFIX = testConfig!.prefix;
+    process.env.REDIS_CHECK_EMAIL_RATE_PREFIX = testConfig!.ratePrefix;
     inspector.on('error', () => {});
     await inspector.connect();
     const module = await Test.createTestingModule({
@@ -83,6 +86,8 @@ describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
     if (inspector.isReady) {
       const keys = await inspector.keys(`${testConfig!.prefix}*`);
       if (keys.length) await inspector.del(keys);
+      const rateKeys = await inspector.keys(`${testConfig!.ratePrefix}*`);
+      if (rateKeys.length) await inspector.del(rateKeys);
       await inspector.close();
     }
     if (connection?.db) await connection.db.dropDatabase();
@@ -90,6 +95,9 @@ describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
     if (baseMongoUri) process.env.MONGODB_URI = baseMongoUri;
     if (originalPrefix) process.env.REDIS_SESSION_PREFIX = originalPrefix;
     else delete process.env.REDIS_SESSION_PREFIX;
+    if (originalRatePrefix)
+      process.env.REDIS_CHECK_EMAIL_RATE_PREFIX = originalRatePrefix;
+    else delete process.env.REDIS_CHECK_EMAIL_RATE_PREFIX;
   });
 
   it('persists users in MongoDB and expiring sessions in Redis', async () => {
@@ -197,6 +205,98 @@ describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
       .expect(200);
   });
 
+  it('allows login after a registration session write fails', async () => {
+    const email = 'sessao.indisponivel@example.com';
+    const set = vi
+      .spyOn(sessionClient.client, 'set')
+      .mockRejectedValueOnce(new Error('connection lost'));
+    try {
+      const failedRegistration = await request(app.getHttpServer())
+        .post('/auth/register')
+        .send({ ...body, email })
+        .expect(503);
+      expect(failedRegistration.body).toEqual({
+        success: false,
+        error: {
+          code: 'REGISTRATION_COMPLETED_SESSION_UNAVAILABLE',
+          message:
+            'Sua conta foi criada, mas não foi possível iniciar a sessão. Tente entrar novamente quando o serviço estiver disponível.',
+          details: [],
+        },
+      });
+      expect(failedRegistration.headers['set-cookie']).toBeUndefined();
+      expect(JSON.stringify(failedRegistration.body)).not.toContain(
+        'access_token',
+      );
+    } finally {
+      set.mockRestore();
+    }
+    const user = await connection.db!.collection('usuarios').findOne({ email });
+    expect(user).not.toBeNull();
+    const login = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email, password: body.password })
+      .expect(200);
+    expect(await inspector.get(sessionKey(login.body.data.access_token))).toBe(
+      user?._id.toString(),
+    );
+  });
+
+  it('limits check-email atomically without changing authentication sessions', async () => {
+    const clearRateKeys = async () => {
+      const keys = await inspector.keys(`${testConfig!.ratePrefix}*`);
+      if (keys.length) await inspector.del(keys);
+    };
+    await clearRateKeys();
+
+    for (let index = 0; index < 30; index++) {
+      await request(app.getHttpServer())
+        .post('/auth/check-email')
+        .send({ email: `lookup${index}@example.com` })
+        .expect(404);
+    }
+    const originLimited = await request(app.getHttpServer())
+      .post('/auth/check-email')
+      .send({ email: 'lookup30@example.com' })
+      .expect(429);
+    expect(originLimited.body.error.code).toBe('CHECK_EMAIL_RATE_LIMITED');
+    expect(Number(originLimited.headers['retry-after'])).toBeGreaterThan(0);
+    const login = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: body.email, password: body.password })
+      .expect(200);
+    expect(
+      await inspector.get(sessionKey(login.body.data.access_token)),
+    ).not.toBeNull();
+
+    await clearRateKeys();
+    for (let index = 0; index < 10; index++) {
+      await request(app.getHttpServer())
+        .post('/auth/check-email')
+        .send({
+          email: index % 2 ? 'REPEATED@EXAMPLE.COM' : 'repeated@example.com',
+        })
+        .expect(404);
+    }
+    const emailLimited = await request(app.getHttpServer())
+      .post('/auth/check-email')
+      .send({ email: 'repeated@example.com' })
+      .expect(429);
+    expect(emailLimited.body.error.code).toBe('CHECK_EMAIL_RATE_LIMITED');
+    expect(Number(emailLimited.headers['retry-after'])).toBeGreaterThan(0);
+    const keys = await inspector.keys(`${testConfig!.ratePrefix}*`);
+    expect(keys).toHaveLength(2);
+    expect(keys.join('')).not.toContain('repeated@example.com');
+    for (const key of keys) {
+      expect(await inspector.pTTL(key)).toBeGreaterThan(0);
+      await inspector.pExpire(key, 0);
+    }
+    await request(app.getHttpServer())
+      .post('/auth/check-email')
+      .send({ email: 'repeated@example.com' })
+      .expect(404);
+  });
+
   it('fails closed when the Redis connection is unavailable', async () => {
     const login = await request(app.getHttpServer())
       .post('/auth/login')
@@ -204,6 +304,13 @@ describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
       .expect(200);
     const token = login.body.data.access_token as string;
     sessionClient.client.destroy();
+    const failedCheckEmail = await request(app.getHttpServer())
+      .post('/auth/check-email')
+      .send({ email: body.email })
+      .expect(503);
+    expect(failedCheckEmail.body.error.code).toBe(
+      'CHECK_EMAIL_RATE_LIMIT_UNAVAILABLE',
+    );
     await request(app.getHttpServer())
       .get('/auth/me')
       .set('Authorization', `Bearer ${token}`)
@@ -222,11 +329,17 @@ describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
     const failedRegistration = await request(app.getHttpServer())
       .post('/auth/register')
       .send({ ...body, email: 'falha.redis@example.com' })
-      .expect(500);
+      .expect(503);
+    expect(failedRegistration.body.error.code).toBe(
+      'REGISTRATION_COMPLETED_SESSION_UNAVAILABLE',
+    );
     expect(failedRegistration.headers['set-cookie']).toBeUndefined();
+    expect(JSON.stringify(failedRegistration.body)).not.toContain(
+      'access_token',
+    );
     expect(
-      await connection.db!
-        .collection('usuarios')
+      await connection
+        .db!.collection('usuarios')
         .findOne({ email: 'falha.redis@example.com' }),
     ).not.toBeNull();
   });

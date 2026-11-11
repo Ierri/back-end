@@ -10,7 +10,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { sessionCookieOptions, SESSION_COOKIE } from './session-cookie.js';
 import { AuthService } from './auth.service.js';
 import { SessoesService } from './sessoes.service.js';
@@ -24,6 +24,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import type { AuthenticatedRequest } from './guards/jwt-auth.guard.js';
 import { ResponseMessage } from '../common/http/response-message.decorator.js';
 import { ApiException } from '../common/http/api.exception.js';
+import { CheckEmailRateLimitService } from './check-email-rate-limit.service.js';
 
 @Controller('auth')
 export class AuthController {
@@ -31,12 +32,26 @@ export class AuthController {
     @Inject(AuthService) private readonly auth: AuthService,
     @Inject(JwtAuthGuard) private readonly guard: JwtAuthGuard,
     @Inject(SessoesService) private readonly sessoes: SessoesService,
+    @Inject(CheckEmailRateLimitService)
+    private readonly checkEmailRateLimit: CheckEmailRateLimitService,
   ) {}
 
   @ResponseMessage('Usuário encontrado.')
   @Post('check-email')
   @HttpCode(HttpStatus.OK)
-  checkEmail(@Body({ schema: checkEmailSchema }) body: CheckEmailDto) {
+  async checkEmail(
+    @Body({ schema: checkEmailSchema }) body: CheckEmailDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const retryAfter = await this.checkEmailRateLimit.consume(
+      request.ip,
+      body.email,
+    );
+    if (retryAfter !== null) {
+      response.setHeader('Retry-After', String(retryAfter));
+      throw new ApiException('CHECK_EMAIL_RATE_LIMITED');
+    }
     return this.auth.checkEmail(body);
   }
 

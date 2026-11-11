@@ -11,7 +11,8 @@ import { configureHttp } from '../common/http/configure-http.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
-import { SessoesService } from './sessoes.service.js';
+import { SessionPersistenceError, SessoesService } from './sessoes.service.js';
+import { CheckEmailRateLimitService } from './check-email-rate-limit.service.js';
 import { UsuariosService } from '../usuarios/usuarios.service.js';
 import { UsuarioSchema } from '../usuarios/schemas/usuario.schema.js';
 import type { UsuarioDocument } from '../usuarios/schemas/usuario.schema.js';
@@ -50,6 +51,9 @@ describe('Auth HTTP (isolated persistence)', () => {
       session.revoked = true;
       return 'revoked';
     }),
+  };
+  const checkEmailRateLimit = {
+    consume: vi.fn().mockResolvedValue(null),
   };
   const usuarios = {
     findByEmail: vi.fn((email: string) => records.get(email) ?? null),
@@ -112,6 +116,7 @@ describe('Auth HTTP (isolated persistence)', () => {
         AuthService,
         JwtAuthGuard,
         { provide: SessoesService, useValue: sessoes },
+        { provide: CheckEmailRateLimitService, useValue: checkEmailRateLimit },
         { provide: UsuariosService, useValue: usuarios },
       ],
     }).compile();
@@ -124,6 +129,7 @@ describe('Auth HTTP (isolated persistence)', () => {
     records.clear();
     sessions.clear();
     vi.clearAllMocks();
+    checkEmailRateLimit.consume.mockResolvedValue(null);
   });
   afterAll(async () => {
     await app.close();
@@ -320,6 +326,60 @@ describe('Auth HTTP (isolated persistence)', () => {
       message: 'Usuário encontrado.',
       data: { user: { name: body.name, initials: 'AT' } },
     });
+    expect(checkEmailRateLimit.consume).toHaveBeenLastCalledWith(
+      expect.any(String),
+      body.email,
+    );
+  });
+
+  it('rejects invalid check-email input before consuming a rate limit', async () => {
+    const result = await request(app.getHttpServer())
+      .post('/auth/check-email')
+      .send({ email: 'invalid' })
+      .expect(400);
+    expect(result.body.error.code).toBe('VALIDATION_ERROR');
+    expect(checkEmailRateLimit.consume).not.toHaveBeenCalled();
+  });
+
+  it('does not use an untrusted forwarded IP header for rate limiting', async () => {
+    await request(app.getHttpServer())
+      .post('/auth/check-email')
+      .set('X-Forwarded-For', '203.0.113.42')
+      .send({ email: body.email })
+      .expect(404);
+    expect(checkEmailRateLimit.consume.mock.calls[0][0]).not.toBe(
+      '203.0.113.42',
+    );
+  });
+
+  it('returns the standard 429 envelope and Retry-After without querying users', async () => {
+    checkEmailRateLimit.consume.mockResolvedValueOnce(47);
+    const result = await request(app.getHttpServer())
+      .post('/auth/check-email')
+      .send({ email: body.email })
+      .expect(429);
+    expect(result.headers['retry-after']).toBe('47');
+    expect(result.body).toEqual({
+      success: false,
+      error: {
+        code: 'CHECK_EMAIL_RATE_LIMITED',
+        message: 'Muitas consultas. Tente novamente mais tarde.',
+        details: [],
+      },
+    });
+    expect(usuarios.findByEmail).not.toHaveBeenCalled();
+  });
+
+  it('does not bypass the limit when Redis fails', async () => {
+    checkEmailRateLimit.consume.mockRejectedValueOnce(
+      new ApiException('CHECK_EMAIL_RATE_LIMIT_UNAVAILABLE'),
+    );
+    const result = await request(app.getHttpServer())
+      .post('/auth/check-email')
+      .send({ email: body.email })
+      .expect(503);
+    expect(result.body.error.code).toBe('CHECK_EMAIL_RATE_LIMIT_UNAVAILABLE');
+    expect(usuarios.findByEmail).not.toHaveBeenCalled();
   });
 
   it('logs in with bcrypt credentials and returns 401 for wrong or unknown credentials', async () => {
@@ -446,15 +506,64 @@ describe('Auth HTTP (isolated persistence)', () => {
     );
   });
 
-  it('does not grant access when a registration session write fails', async () => {
-    sessoes.create.mockRejectedValueOnce(new Error('database unavailable'));
+  it('reports a completed registration when session persistence fails', async () => {
+    sessoes.create.mockRejectedValueOnce(new SessionPersistenceError());
+    const result = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send(body)
+      .expect(503);
+    expect(result.body).toEqual({
+      success: false,
+      error: {
+        code: 'REGISTRATION_COMPLETED_SESSION_UNAVAILABLE',
+        message:
+          'Sua conta foi criada, mas não foi possível iniciar a sessão. Tente entrar novamente quando o serviço estiver disponível.',
+        details: [],
+      },
+    });
+    expect(result.headers['set-cookie']).toBeUndefined();
+    expect(records.has(body.email)).toBe(true);
+    expect(sessions.size).toBe(0);
+    expect(usuarios.create).toHaveBeenCalledOnce();
+    await request(app.getHttpServer()).get('/auth/me').expect(401);
+    await request(app.getHttpServer())
+      .post('/auth/register')
+      .send(body)
+      .expect(409);
+    const login = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: body.email, password: body.password })
+      .expect(200);
+    expect(login.body.data.user.email).toBe(body.email);
+    expect(login.headers['set-cookie'][0]).toContain('ierri_session=');
+  });
+
+  it('does not report a completed registration when user persistence fails', async () => {
+    usuarios.create.mockRejectedValueOnce(new Error('MongoDB unavailable'));
     const result = await request(app.getHttpServer())
       .post('/auth/register')
       .send(body)
       .expect(500);
+    expect(result.body.error.code).toBe('INTERNAL_ERROR');
+    expect(JSON.stringify(result.body)).not.toContain('access_token');
+    expect(result.headers['set-cookie']).toBeUndefined();
+    expect(records.has(body.email)).toBe(false);
+    expect(sessoes.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps unrelated failures out of the session-unavailable response', async () => {
+    const sign = vi
+      .spyOn(jwt, 'signAsync')
+      .mockRejectedValueOnce(new Error('signing failed'));
+    const result = await request(app.getHttpServer())
+      .post('/auth/register')
+      .send(body)
+      .expect(500);
+    sign.mockRestore();
+    expect(result.body.error.code).toBe('INTERNAL_ERROR');
     expect(result.headers['set-cookie']).toBeUndefined();
     expect(records.has(body.email)).toBe(true);
-    await request(app.getHttpServer()).get('/auth/me').expect(401);
+    expect(sessoes.create).not.toHaveBeenCalled();
   });
 
   it('fails closed when session creation, lookup or revocation fails', async () => {

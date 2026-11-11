@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { RedisSessionClient } from './redis-session.client.js';
-import { SessoesService } from './sessoes.service.js';
+import { SessionPersistenceError, SessoesService } from './sessoes.service.js';
 
 const userId = '507f1f77bcf86cd799439011';
 const sessionId = 'a'.repeat(43);
@@ -41,11 +41,18 @@ describe('SessoesService', () => {
     client.set.mockResolvedValueOnce(null);
     await expect(
       service.create(sessionId, userId, new Date(Date.now() + 60_000)),
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(SessionPersistenceError);
     await expect(
       service.create(sessionId, userId, new Date(0)),
     ).rejects.toThrow();
     expect(client.set).toHaveBeenCalledOnce();
+  });
+
+  it('identifies a failed Redis write as a session persistence failure', async () => {
+    client.set.mockRejectedValueOnce(new Error('connection lost'));
+    await expect(
+      service.create(sessionId, userId, new Date(Date.now() + 60_000)),
+    ).rejects.toBeInstanceOf(SessionPersistenceError);
   });
 
   it('allows only a session belonging to the JWT user', async () => {
@@ -88,7 +95,7 @@ describe('SessoesService', () => {
     );
     await expect(
       service.create(sessionId, userId, new Date(Date.now() + 60_000)),
-    ).rejects.toThrow('Redis indisponível.');
+    ).rejects.toBeInstanceOf(SessionPersistenceError);
     client.isReady = true;
     client.get.mockRejectedValueOnce(new Error('connection lost'));
     await expect(service.assertActive(sessionId, userId)).rejects.toThrow(
