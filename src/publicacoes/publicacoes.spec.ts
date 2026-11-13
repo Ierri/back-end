@@ -80,6 +80,7 @@ function setup(verifier: MediaVerifier = new UnavailableMediaVerifier()) {
     find: vi.fn().mockReturnValue(query([])),
     findOne: vi.fn().mockReturnValue(query(saved)),
     findOneAndUpdate: vi.fn().mockReturnValue(query(saved)),
+    deleteOne: vi.fn().mockReturnValue(query({ deletedCount: 1 })),
   };
   const users = {
     findById: vi.fn().mockReturnValue(query(author)),
@@ -281,22 +282,68 @@ describe('PublicacoesService', () => {
       .mockResolvedValue([
         { referencia: 'referencia-verificada', ...media() } as VerifiedMedia,
       ]);
+    const confirm = vi.fn().mockResolvedValue(undefined);
+    const finalize = vi.fn().mockResolvedValue(undefined);
     const verifier: MediaVerifier = {
       resolveForPublication: resolve,
+      confirmForPublication: confirm,
+      finalizeForPublication: finalize,
+      releaseForPublication: vi.fn().mockResolvedValue(undefined),
     };
-    const { service, publications } = setup(verifier);
+    const { service, publications, saved } = setup(verifier);
     const result = await service.create(authorId.toString(), body());
     const stored = publications.create.mock.calls[0][0];
 
-    expect(resolve).toHaveBeenCalledWith(authorId.toString(), [
+    expect(resolve).toHaveBeenCalledWith(
+      authorId.toString(),
+      ['referencia-verificada'],
+      expect.any(String),
+    );
+    expect(stored.autor_id.toString()).toBe(authorId.toString());
+    expect(stored.status).toBe('processando');
+    expect(stored.publicada_em).toBeNull();
+    expect(confirm).toHaveBeenCalledWith(stored._id.toString(), [
       'referencia-verificada',
     ]);
-    expect(stored.autor_id.toString()).toBe(authorId.toString());
-    expect(stored.status).toBe('publicada');
-    expect(stored.publicada_em).toBeInstanceOf(Date);
+    expect(finalize).toHaveBeenCalledWith(stored._id.toString(), [
+      'referencia-verificada',
+    ]);
+    expect(publications.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: saved._id, status: 'processando' },
+      { $set: { status: 'publicada', publicada_em: expect.any(Date) } },
+      { new: true, runValidators: true },
+    );
+    expect(confirm.mock.invocationCallOrder[0]).toBeLessThan(
+      publications.findOneAndUpdate.mock.invocationCallOrder[0],
+    );
+    expect(
+      publications.findOneAndUpdate.mock.invocationCallOrder[0],
+    ).toBeLessThan(finalize.mock.invocationCallOrder[0]);
     expect(stored.midias).toHaveLength(1);
     expect(result.autor).not.toHaveProperty('email');
     expect(result.midias[0]).not.toHaveProperty('chave_storage');
+  });
+
+  it('keeps a successfully published post when expiry normalization fails temporarily', async () => {
+    const finalize = vi
+      .fn()
+      .mockRejectedValue(new Error('MongoDB unavailable'));
+    const verifier: MediaVerifier = {
+      resolveForPublication: vi
+        .fn()
+        .mockResolvedValue([
+          { referencia: 'referencia-verificada', ...media() },
+        ]),
+      confirmForPublication: vi.fn().mockResolvedValue(undefined),
+      finalizeForPublication: finalize,
+      releaseForPublication: vi.fn().mockResolvedValue(undefined),
+    };
+    const { service, publications } = setup(verifier);
+    await expect(
+      service.create(authorId.toString(), body()),
+    ).resolves.toMatchObject({ status: 'publicada' });
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(publications.deleteOne).not.toHaveBeenCalled();
   });
 
   it('rejects mismatched or invalid verified media before persistence', async () => {
@@ -304,12 +351,88 @@ describe('PublicacoesService', () => {
       resolveForPublication: vi
         .fn()
         .mockResolvedValue([{ referencia: 'other', ...media() }]),
+      confirmForPublication: vi.fn().mockResolvedValue(undefined),
+      finalizeForPublication: vi.fn().mockResolvedValue(undefined),
+      releaseForPublication: vi.fn().mockResolvedValue(undefined),
     };
     const { service, publications } = setup(verifier);
     await expect(
       service.create(authorId.toString(), body()),
     ).rejects.toMatchObject({ status: 422 });
     expect(publications.create).not.toHaveBeenCalled();
+  });
+
+  it('does not publish when media confirmation loses a cleanup race', async () => {
+    const confirm = vi
+      .fn()
+      .mockRejectedValue(new ApiException('MEDIA_INVALID'));
+    const release = vi.fn().mockResolvedValue(undefined);
+    const verifier: MediaVerifier = {
+      resolveForPublication: vi
+        .fn()
+        .mockResolvedValue([
+          { referencia: 'referencia-verificada', ...media() },
+        ]),
+      confirmForPublication: confirm,
+      finalizeForPublication: vi.fn().mockResolvedValue(undefined),
+      releaseForPublication: release,
+    };
+    const { service, publications } = setup(verifier);
+    await expect(
+      service.create(authorId.toString(), body()),
+    ).rejects.toMatchObject({ status: 422 });
+    expect(publications.create).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'processando' }),
+    );
+    expect(publications.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(publications.deleteOne).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'processando' }),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('retains the reservation when MongoDB reports an ambiguous create failure', async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    const verifier: MediaVerifier = {
+      resolveForPublication: vi
+        .fn()
+        .mockResolvedValue([
+          { referencia: 'referencia-verificada', ...media() },
+        ]),
+      confirmForPublication: vi.fn().mockResolvedValue(undefined),
+      finalizeForPublication: vi.fn().mockResolvedValue(undefined),
+      releaseForPublication: release,
+    };
+    const { service, publications } = setup(verifier);
+    publications.create.mockRejectedValueOnce(
+      new Error('MongoDB connection lost'),
+    );
+    await expect(service.create(authorId.toString(), body())).rejects.toThrow(
+      'MongoDB connection lost',
+    );
+    expect(publications.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('does not release media if publication may already be published', async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    const verifier: MediaVerifier = {
+      resolveForPublication: vi
+        .fn()
+        .mockResolvedValue([
+          { referencia: 'referencia-verificada', ...media() },
+        ]),
+      confirmForPublication: vi.fn().mockResolvedValue(undefined),
+      finalizeForPublication: vi.fn().mockResolvedValue(undefined),
+      releaseForPublication: release,
+    };
+    const { service, publications } = setup(verifier);
+    publications.findOneAndUpdate.mockReturnValueOnce(query(null));
+    publications.deleteOne.mockReturnValueOnce(query({ deletedCount: 0 }));
+    await expect(
+      service.create(authorId.toString(), body()),
+    ).rejects.toMatchObject({ status: 422 });
+    expect(release).not.toHaveBeenCalled();
   });
 
   it.each([MAX_MEDIA_SIZE_BYTES, MAX_MEDIA_SIZE_BYTES + 1])(
@@ -322,6 +445,9 @@ describe('PublicacoesService', () => {
             ...media({ tamanho_bytes: size }),
           },
         ]),
+        confirmForPublication: vi.fn().mockResolvedValue(undefined),
+        finalizeForPublication: vi.fn().mockResolvedValue(undefined),
+        releaseForPublication: vi.fn().mockResolvedValue(undefined),
       };
       const { service, publications } = setup(verifier);
       if (size <= MAX_MEDIA_SIZE_BYTES) {
