@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { Readable } from 'node:stream';
 import type { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
@@ -10,8 +11,10 @@ import { AppModule } from '../app.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { RedisSessionClient } from '../auth/redis-session.client.js';
+import { ApiException } from '../common/http/api.exception.js';
 import { Usuario } from '../usuarios/schemas/usuario.schema.js';
 import { OptionalAuthGuard } from './optional-auth.guard.js';
+import { MediaAccessService } from './media-access.service.js';
 import { Publicacao } from './schemas/publicacao.schema.js';
 import { RequiredAuthGuard } from './required-auth.guard.js';
 
@@ -46,6 +49,17 @@ describe('PublicacoesModule wiring', () => {
       .useValue({})
       .overrideProvider(getModelToken(Publicacao.name))
       .useValue({ find: vi.fn().mockReturnValue(emptyQuery) })
+      .overrideProvider(MediaAccessService)
+      .useValue({
+        open: vi.fn().mockResolvedValue({
+          body: Readable.from(Buffer.from('image-bytes')),
+          mimeType: 'image/png',
+          size: 11,
+          length: 11,
+          range: null,
+          isVideo: false,
+        }),
+      })
       .overrideProvider(RedisSessionClient)
       .useValue({ client: { isReady: false }, prefix: 'ierri:test:session:' })
       .compile();
@@ -78,11 +92,41 @@ describe('PublicacoesModule wiring', () => {
       .expect(401);
     await request(server).post('/publicacoes').send({}).expect(401);
     await request(server)
+      .post('/publicacoes/midias')
+      .attach('arquivo', Buffer.from('x'), 'sample.png')
+      .expect(401);
+    await request(server)
       .patch('/publicacoes/000000000000000000000001')
       .send({})
       .expect(401);
     await request(server)
       .delete('/publicacoes/000000000000000000000001')
       .expect(401);
+  });
+
+  it('serves binary media through the API without wrapping the response', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/publicacoes/midias/valid-reference-123')
+      .expect(200)
+      .expect('Content-Type', 'image/png')
+      .expect('Cache-Control', 'private, no-store');
+    expect(response.body).toEqual(Buffer.from('image-bytes'));
+  });
+
+  it('rejects invalid media credentials before serving bytes', async () => {
+    await request(app.getHttpServer())
+      .get('/publicacoes/midias/valid-reference-123')
+      .set('Authorization', 'Bearer invalid')
+      .expect(401);
+  });
+
+  it('returns 404 for a missing media reference', async () => {
+    const access = app.get(MediaAccessService) as unknown as {
+      open: ReturnType<typeof vi.fn>;
+    };
+    access.open.mockRejectedValueOnce(new ApiException('MEDIA_NOT_FOUND'));
+    await request(app.getHttpServer())
+      .get('/publicacoes/midias/valid-reference-123')
+      .expect(404);
   });
 });

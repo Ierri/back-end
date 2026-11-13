@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const publicacaoIdSchema = z.string().regex(/^[a-f\d]{24}$/i);
+export const mediaReferenceSchema = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
 
 export const listPublicacoesSchema = z.strictObject({
   limite: z
@@ -19,7 +20,7 @@ export const createPublicacaoSchema = z.strictObject({
   conteudo: z.string().trim().min(1),
   visibilidade: z.enum(['publico', 'seguidores']).default('publico'),
   midias: z
-    .array(z.string().regex(/^[A-Za-z0-9_-]{16,128}$/))
+    .array(mediaReferenceSchema)
     .min(1)
     .max(10)
     .refine((references) => new Set(references).size === references.length),
