@@ -15,6 +15,7 @@ import {
 } from './media-verifier.js';
 import type { MediaVerifier, VerifiedMedia } from './media-verifier.js';
 import { PublicacoesCursor } from './publicacoes.cursor.js';
+import type { PublicacoesCacheService } from './publicacoes-cache.service.js';
 import { PublicacoesService } from './publicacoes.service.js';
 import { Publicacao, PublicacaoSchema } from './schemas/publicacao.schema.js';
 
@@ -94,6 +95,11 @@ function setup(verifier: MediaVerifier = new UnavailableMediaVerifier()) {
     users as unknown as Model<Usuario>,
     verifier,
     cursor,
+    {
+      pageAddress: vi.fn().mockResolvedValue(null),
+      postAddress: vi.fn().mockResolvedValue(null),
+      invalidate: vi.fn().mockResolvedValue(undefined),
+    } as unknown as PublicacoesCacheService,
   );
   return { service, publications, users, saved, author, cursor };
 }

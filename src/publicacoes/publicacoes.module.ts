@@ -3,6 +3,8 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { AuthModule } from '../auth/auth.module.js';
 import { Usuario, UsuarioSchema } from '../usuarios/schemas/usuario.schema.js';
 import { MEDIA_VERIFIER } from './media-verifier.js';
+import { PublicacoesCacheClient } from './publicacoes-cache.client.js';
+import { PublicacoesCacheService } from './publicacoes-cache.service.js';
 import { MediaAccessService } from './media-access.service.js';
 import { MediaCleanupService } from './media-cleanup.service.js';
 import { MediaController } from './media.controller.js';
@@ -34,6 +36,8 @@ import { VideoProbeService } from './video-probe.service.js';
   controllers: [PublicacoesController, MediaController],
   providers: [
     PublicacoesService,
+    PublicacoesCacheClient,
+    PublicacoesCacheService,
     PublicacoesCursor,
     OptionalAuthGuard,
     RequiredAuthGuard,
