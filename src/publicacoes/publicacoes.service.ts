@@ -99,41 +99,81 @@ export class PublicacoesService {
       .exec();
     if (!author) throw new ApiException('AUTH_REQUIRED');
 
+    const publicationId = new Types.ObjectId();
     const verified = await this.mediaVerifier.resolveForPublication(
       authorId,
       body.midias,
+      publicationId.toString(),
     );
-    if (
-      verified.length !== body.midias.length ||
-      verified.some((media, index) => media.referencia !== body.midias[index])
-    ) {
-      throw new ApiException('MEDIA_INVALID');
-    }
-    const midias: PublicacaoMidia[] = verified.map((media, ordem) => ({
-      _id: new Types.ObjectId(),
-      tipo: media.tipo,
-      url: media.url,
-      chave_storage: media.chave_storage,
-      mime_type: media.mime_type,
-      tamanho_bytes: media.tamanho_bytes,
-      largura: media.largura,
-      altura: media.altura,
-      duracao_segundos: media.duracao_segundos,
-      texto_alternativo: null,
-      ordem,
-    }));
-    if (!validPublicationMedia(midias)) throw new ApiException('MEDIA_INVALID');
+    let writeStarted = false;
+    let postPersisted = false;
+    try {
+      if (
+        verified.length !== body.midias.length ||
+        verified.some((media, index) => media.referencia !== body.midias[index])
+      ) {
+        throw new ApiException('MEDIA_INVALID');
+      }
+      const midias: PublicacaoMidia[] = verified.map((media, ordem) => ({
+        _id: new Types.ObjectId(),
+        tipo: media.tipo,
+        url: media.url,
+        chave_storage: media.chave_storage,
+        mime_type: media.mime_type,
+        tamanho_bytes: media.tamanho_bytes,
+        largura: media.largura,
+        altura: media.altura,
+        duracao_segundos: media.duracao_segundos,
+        texto_alternativo: null,
+        ordem,
+      }));
+      if (!validPublicationMedia(midias))
+        throw new ApiException('MEDIA_INVALID');
 
-    const created = await this.publicacoes.create({
-      slug: `post-${randomBytes(12).toString('hex')}`,
-      autor_id: new Types.ObjectId(authorId),
-      conteudo: body.conteudo,
-      midias,
-      visibilidade: body.visibilidade,
-      status: 'publicada',
-      publicada_em: new Date(),
-    });
-    return this.toResponse(created, author);
+      writeStarted = true;
+      const created = await this.publicacoes.create({
+        _id: publicationId,
+        slug: `post-${randomBytes(12).toString('hex')}`,
+        autor_id: new Types.ObjectId(authorId),
+        conteudo: body.conteudo,
+        midias,
+        visibilidade: body.visibilidade,
+        status: 'processando',
+        publicada_em: null,
+      });
+      postPersisted = true;
+      await this.mediaVerifier.confirmForPublication(
+        publicationId.toString(),
+        body.midias,
+      );
+      const published = await this.publicacoes
+        .findOneAndUpdate(
+          { _id: created._id, status: 'processando' },
+          { $set: { status: 'publicada', publicada_em: new Date() } },
+          { new: true, runValidators: true },
+        )
+        .exec();
+      if (!published) throw new ApiException('MEDIA_INVALID');
+      await this.mediaVerifier
+        .finalizeForPublication(publicationId.toString(), body.midias)
+        .catch(() => undefined);
+      return this.toResponse(published, author);
+    } catch (error) {
+      let safeToRelease = !writeStarted;
+      if (postPersisted) {
+        const deleted = await this.publicacoes
+          .deleteOne({ _id: publicationId, status: 'processando' })
+          .exec()
+          .catch(() => null);
+        safeToRelease = deleted?.deletedCount === 1;
+      }
+      if (safeToRelease) {
+        await this.mediaVerifier
+          .releaseForPublication(publicationId.toString(), body.midias)
+          .catch(() => undefined);
+      }
+      throw error;
+    }
   }
 
   async findById(id: string, viewerId?: string) {

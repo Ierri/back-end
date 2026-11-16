@@ -60,6 +60,20 @@ export const API_ERRORS = {
     status: HttpStatus.SERVICE_UNAVAILABLE,
     message: 'Não é possível validar mídias agora. Tente novamente mais tarde.',
   },
+  MEDIA_STORAGE_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message:
+      'Armazenamento de mídias indisponível. Tente novamente mais tarde.',
+  },
+  MEDIA_PROCESSING_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message:
+      'Não foi possível analisar a mídia agora. Tente novamente mais tarde.',
+  },
+  MEDIA_NOT_FOUND: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'Mídia não encontrada.',
+  },
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERRORS;
