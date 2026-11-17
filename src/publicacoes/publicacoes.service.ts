@@ -11,6 +11,11 @@ import type {
   ListPublicacoesDto,
   UpdatePublicacaoDto,
 } from './dto/publicacoes.dto.js';
+import { PublicacoesCacheService } from './publicacoes-cache.service.js';
+import type {
+  CachedPublicacao,
+  CachedPublicacoesPage,
+} from './publicacoes-cache.service.js';
 import { MEDIA_VERIFIER } from './media-verifier.js';
 import type { MediaVerifier } from './media-verifier.js';
 import { PublicacoesCursor } from './publicacoes.cursor.js';
@@ -31,6 +36,8 @@ export class PublicacoesService {
     @InjectModel(Usuario.name) private readonly usuarios: Model<Usuario>,
     @Inject(MEDIA_VERIFIER) private readonly mediaVerifier: MediaVerifier,
     @Inject(PublicacoesCursor) private readonly cursor: PublicacoesCursor,
+    @Inject(PublicacoesCacheService)
+    private readonly cache: PublicacoesCacheService,
   ) {}
 
   async list(query: ListPublicacoesDto, viewerId?: string) {
@@ -42,10 +49,53 @@ export class PublicacoesService {
     const position = query.cursor
       ? this.cursor.decode(query.cursor, scope)
       : null;
+    const address = await this.cache.pageAddress(
+      query.limite,
+      authorId,
+      position,
+      scope.owner,
+    );
+    if (address) {
+      const cached = await this.cache.readPage(address);
+      if (
+        cached &&
+        (await this.cachedPageCurrent(
+          cached,
+          query.limite,
+          authorId,
+          position,
+        )) &&
+        (await this.cache.isCurrent(address))
+      ) {
+        this.cache.countHit();
+        return cached;
+      }
+      if (cached) this.cache.countStaleMiss();
+      return this.cache.coalesce(address.key, async () => {
+        this.cache.countMongoAfterMiss();
+        const fresh = await this.loadList(
+          query,
+          authorId,
+          scope.owner,
+          position,
+        );
+        await this.cache.writePage(address, fresh);
+        return fresh;
+      });
+    }
+    return this.loadList(query, authorId, scope.owner, position);
+  }
+
+  private async loadList(
+    query: ListPublicacoesDto,
+    authorId: string | null,
+    owner: boolean,
+    position: { publishedAt: Date; id: Types.ObjectId } | null,
+  ) {
     const filter = {
       status: 'publicada' as const,
       ...(authorId ? { autor_id: new Types.ObjectId(authorId) } : {}),
-      ...(!scope.owner ? { visibilidade: 'publico' as const } : {}),
+      ...(!owner ? { visibilidade: 'publico' as const } : {}),
       ...(position
         ? {
             $or: [
@@ -85,7 +135,7 @@ export class PublicacoesService {
         hasMore && last
           ? this.cursor.encode(
               { publishedAt: last.publicada_em!, id: last._id },
-              scope,
+              { authorId, owner },
             )
           : null,
       hasMore,
@@ -157,6 +207,7 @@ export class PublicacoesService {
       await this.mediaVerifier
         .finalizeForPublication(publicationId.toString(), body.midias)
         .catch(() => undefined);
+      await this.cache.invalidate(publicationId.toString(), authorId);
       return this.toResponse(published, author);
     } catch (error) {
       let safeToRelease = !writeStarted;
@@ -177,6 +228,32 @@ export class PublicacoesService {
   }
 
   async findById(id: string, viewerId?: string) {
+    const address = await this.cache.postAddress(id);
+    if (address) {
+      const cached = await this.cache.readPost(address);
+      if (
+        cached &&
+        cached.id.toLowerCase() === id.toLowerCase() &&
+        (await this.cachedPostsCurrent([cached], null)) &&
+        (await this.cache.isCurrent(address))
+      ) {
+        this.cache.countHit();
+        return cached;
+      }
+      if (cached) this.cache.countStaleMiss();
+      const load = async () => {
+        this.cache.countMongoAfterMiss();
+        const fresh = await this.loadById(id, viewerId);
+        if (fresh.visibilidade === 'publico')
+          await this.cache.writePost(address, fresh);
+        return fresh;
+      };
+      return viewerId ? load() : this.cache.coalesce(address.key, load);
+    }
+    return this.loadById(id, viewerId);
+  }
+
+  private async loadById(id: string, viewerId?: string) {
     const accessible = viewerId
       ? [
           { visibilidade: 'publico' as const },
@@ -193,6 +270,100 @@ export class PublicacoesService {
       .exec();
     if (!author) throw new ApiException('PUBLICACAO_NOT_FOUND');
     return this.toResponse(publication, author);
+  }
+
+  private async cachedPageCurrent(
+    cached: CachedPublicacoesPage,
+    limit: number,
+    authorId: string | null,
+    position: { publishedAt: Date; id: Types.ObjectId } | null,
+  ) {
+    if (
+      cached.items.length > limit ||
+      cached.hasMore !== (cached.nextCursor !== null) ||
+      (cached.hasMore && cached.items.length === 0)
+    )
+      return false;
+    const compare = (left: CachedPublicacao, right: CachedPublicacao) =>
+      left.publicadaEm.getTime() - right.publicadaEm.getTime() ||
+      left.id.localeCompare(right.id);
+    for (let index = 0; index < cached.items.length; index++) {
+      const item = cached.items[index];
+      if (authorId && item.autor.id.toLowerCase() !== authorId) return false;
+      if (index > 0 && compare(cached.items[index - 1], item) <= 0)
+        return false;
+      if (
+        position &&
+        (item.publicadaEm.getTime() > position.publishedAt.getTime() ||
+          (item.publicadaEm.getTime() === position.publishedAt.getTime() &&
+            item.id >= position.id.toString()))
+      )
+        return false;
+    }
+    if (cached.nextCursor) {
+      try {
+        const last = cached.items.at(-1)!;
+        const decoded = this.cursor.decode(cached.nextCursor, {
+          authorId,
+          owner: false,
+        });
+        if (
+          decoded.id.toString() !== last.id ||
+          decoded.publishedAt.getTime() !== last.publicadaEm.getTime()
+        )
+          return false;
+      } catch {
+        return false;
+      }
+    }
+    return this.cachedPostsCurrent(cached.items, authorId);
+  }
+
+  private async cachedPostsCurrent(
+    cached: CachedPublicacao[],
+    authorId: string | null,
+  ) {
+    if (!cached.length) return true;
+    const ids = cached.map((item) => new Types.ObjectId(item.id));
+    const stored = await this.publicacoes
+      .find({ _id: { $in: ids } })
+      .select('_id status visibilidade autor_id publicada_em atualizada_em')
+      .lean()
+      .exec();
+    if (stored.length !== cached.length) return false;
+    const byId = new Map(stored.map((item) => [item._id.toString(), item]));
+    for (const item of cached) {
+      const current = byId.get(item.id);
+      if (
+        !current ||
+        current.status !== 'publicada' ||
+        current.visibilidade !== 'publico' ||
+        current.autor_id.toString() !== item.autor.id ||
+        (authorId && current.autor_id.toString() !== authorId) ||
+        current.publicada_em?.getTime() !== item.publicadaEm.getTime() ||
+        current.atualizada_em.getTime() !== item.atualizadaEm.getTime()
+      )
+        return false;
+    }
+    const authorIds = [...new Set(cached.map((item) => item.autor.id))];
+    const authors = await this.usuarios
+      .find({ _id: { $in: authorIds } })
+      .select('nome username biografia avatar_url')
+      .lean()
+      .exec();
+    if (authors.length !== authorIds.length) return false;
+    const byAuthor = new Map(
+      authors.map((author) => [author._id.toString(), author]),
+    );
+    return cached.every((item) => {
+      const author = byAuthor.get(item.autor.id);
+      return (
+        author?.nome === item.autor.nome &&
+        author.username === item.autor.username &&
+        (author.biografia ?? null) === item.autor.biografia &&
+        (author.avatar_url ?? null) === item.autor.avatarUrl
+      );
+    });
   }
 
   async update(id: string, authorId: string, body: UpdatePublicacaoDto) {
@@ -215,6 +386,7 @@ export class PublicacoesService {
       )
       .exec();
     if (!publication) throw new ApiException('PUBLICACAO_NOT_FOUND');
+    await this.cache.invalidate(id, authorId);
     const author = await this.usuarios
       .findById(authorId)
       .select('nome username biografia avatar_url')
@@ -236,6 +408,7 @@ export class PublicacoesService {
       )
       .exec();
     if (!publication) throw new ApiException('PUBLICACAO_NOT_FOUND');
+    await this.cache.invalidate(id, authorId);
     return null;
   }
 
