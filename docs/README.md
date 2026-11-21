@@ -1,5 +1,7 @@
 # Documentação do back-end
 
+> **Atualização em 21/11/2026:** leia primeiro o [contrato de persistência MongoDB](./modelagem/contrato-banco.md). Ele registra o estado observado na `staging`, schemas e índices declarados, transações, dados iniciais e pendências. Os documentos abaixo preservam o desenho de produto e podem descrever coleções ainda não implementadas.
+
 ## Modelagem de dados
 
 A modelagem está em [`modelagem/`](./modelagem/). Ela é uma especificação para revisão e implementação futura; a presença de uma coleção nos documentos não significa que ela já exista no código.
@@ -14,9 +16,9 @@ Ordem recomendada de leitura:
 
 ### Situação
 
-- `usuarios` e a autenticação local possuem implementação parcial no back-end.
-- As demais coleções são propostas de modelagem.
-- Decisões marcadas como pendentes precisam de aprovação antes de virarem contrato técnico.
+- `usuarios`, `publicacoes` e `uploads_midias` possuem implementação no back-end; as demais coleções com schema nesta revisão estão listadas no contrato.
+- Notificações, denúncias e outbox permanecem propostas de modelagem.
+- Decisões de produto pendentes não devem ser tratadas como fluxos já implementados.
 - Campos, índices e regras novas devem ser introduzidos com compatibilidade para documentos existentes.
 
 ### Diagramas

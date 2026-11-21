@@ -1,8 +1,10 @@
 # IR / Ierri — modelagem da coleção `usuarios`
 
+> **Estado em 21/11/2026:** este documento contém o desenho de produto e parte de sua seção de implementação é histórica. Consulte o [contrato MongoDB](./contrato-banco.md) para o schema e os índices declarados nesta revisão. Campos sociais foram adicionados ao schema, mas as regras de autorização e os serviços de contadores ainda não foram implementados.
+
 **Tipo de artefato:** especificação conceitual, lógica e física  
 **Banco principal:** MongoDB  
-**Status:** proposta de modelagem; não representa implementação automática  
+**Status:** desenho de domínio com implementação parcial; veja o contrato MongoDB
 **Escopo:** conta, perfil público e atributos de controle do usuário
 
 **Visualização recomendada:** importar [`der-completo.dbml`](./der-completo.dbml) em [dbdiagram.io](https://dbdiagram.io). [`der-usuarios.dbml`](./der-usuarios.dbml) mantém a visão isolada desta coleção.

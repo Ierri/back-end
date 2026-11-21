@@ -1,5 +1,7 @@
 # IR / Ierri — entrega da modelagem de dados para a equipe
 
+> **Atualização:** este handoff de 08/11/2026 é histórico. O estado da implementação, os índices e a estratégia transacional revisados em 21/11/2026 estão no [contrato MongoDB](./contrato-banco.md).
+
 **Data de consolidação:** 08/11/2026  
 **Versão:** 1.0  
 **Banco principal:** MongoDB  
@@ -582,4 +584,3 @@ A modelagem será considerada aprovada quando:
 - o back-end confirmar a viabilidade dos índices e fluxos transacionais;
 - alterações solicitadas estiverem refletidas no DER e nos documentos;
 - produto, back-end e QA registrarem aprovação na tabela acima.
-

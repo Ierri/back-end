@@ -1,7 +1,7 @@
 Project ierri_modelagem_completa {
   database_type: 'MongoDB'
   Note: '''
-    Modelo lógico e físico proposto para o IR / Ierri.
+    Modelo de domínio do IR / Ierri. Estado de implementação e índices reais: contrato-banco.md.
     DBML é usado como notação visual para coleções MongoDB.
     publicacao_midias representa subdocumentos incorporados, não uma coleção física.
     Relações polimórficas são documentadas por notas e validadas pela aplicação.
@@ -121,7 +121,7 @@ Table usuarios [headercolor: #3B82F6, note: 'Coleção existente. Ver modelagem-
   excluido_em datetime
 
   indexes {
-    (status, criado_em [desc]) [name: 'ix_usuarios_status_criado_em']
+    (status, criado_em [desc], _id [desc]) [name: 'ix_usuarios_status_criado_em']
     (papeis, status) [name: 'ix_usuarios_papeis_status']
   }
 }
@@ -135,6 +135,10 @@ Table tecnologias [headercolor: #10B981, note: 'Catálogo compartilhado e contro
   ativo boolean [not null, default: true]
   criado_em datetime [not null]
   atualizado_em datetime [not null]
+
+  indexes {
+    (ativo, nome, _id) [name: 'ix_tecnologias_ativas_nome']
+  }
 }
 
 Table publicacoes [headercolor: #8B5CF6, note: 'Agregado principal. O array midias é incorporado e limitado a 10 itens.'] {
@@ -156,9 +160,36 @@ Table publicacoes [headercolor: #8B5CF6, note: 'Agregado principal. O array midi
   atualizada_em datetime [not null]
 
   indexes {
-    (autor_id, publicada_em [desc]) [name: 'ix_publicacoes_autor_publicada_em']
-    (status, visibilidade, publicada_em [desc]) [name: 'ix_publicacoes_feed']
+    (autor_id, status, publicada_em [desc], _id [desc]) [name: 'ix_publicacoes_autor_publicada_em']
+    (autor_id, status, visibilidade, publicada_em [desc], _id [desc]) [name: 'ix_publicacoes_autor_visibilidade']
+    (status, visibilidade, publicada_em [desc], _id [desc]) [name: 'ix_publicacoes_feed']
     (status, visibilidade, "contadores.score" [desc], publicada_em [desc]) [name: 'ix_publicacoes_ranking']
+  }
+}
+
+Table uploads_midias [headercolor: #A78BFA, note: 'Metadados e estado de upload existentes; bytes ficam no Object Storage.'] {
+  _id ObjectId [pk, not null]
+  referencia string [not null, unique]
+  usuario_id ObjectId [not null]
+  chave_storage string [not null, unique]
+  tipo tipo_midia [not null]
+  mime_type string [not null]
+  tamanho_bytes long [not null]
+  largura int
+  altura int
+  duracao_segundos int
+  sha256 string [not null]
+  estado string [not null]
+  publicacao_id ObjectId
+  reservada_em datetime
+  expira_em datetime
+  criado_em datetime [not null]
+  atualizado_em datetime [not null]
+
+  indexes {
+    (estado, expira_em) [name: 'ix_uploads_estado_expira']
+    (expira_em, _id) [name: 'ix_uploads_expira']
+    (publicacao_id, estado) [name: 'ix_uploads_publicacao_estado']
   }
 }
 
@@ -191,9 +222,9 @@ Table comentarios [headercolor: #F59E0B, note: 'Árvore limitada às profundidad
   atualizado_em datetime [not null]
 
   indexes {
-    (publicacao_id, comentario_pai_id, criado_em) [name: 'ix_comentarios_publicacao_pai']
-    (comentario_raiz_id, criado_em) [name: 'ix_comentarios_raiz']
-    (autor_id, criado_em [desc]) [name: 'ix_comentarios_autor']
+    (publicacao_id, comentario_pai_id, criado_em, _id) [name: 'ix_comentarios_publicacao_pai']
+    (comentario_raiz_id, criado_em, _id) [name: 'ix_comentarios_raiz']
+    (autor_id, criado_em [desc], _id [desc]) [name: 'ix_comentarios_autor']
   }
 }
 
@@ -207,6 +238,7 @@ Table votos [headercolor: #EF4444, note: 'Um voto por usuário e publicação. T
 
   indexes {
     (publicacao_id, usuario_id) [unique, name: 'uq_votos_publicacao_usuario']
+    (usuario_id, atualizado_em [desc], _id [desc]) [name: 'ix_votos_usuario_atualizado']
   }
 }
 
@@ -218,7 +250,7 @@ Table publicacoes_salvas [headercolor: #EC4899, note: 'Relação idempotente ent
 
   indexes {
     (usuario_id, publicacao_id) [unique, name: 'uq_salvas_usuario_publicacao']
-    (usuario_id, criado_em [desc]) [name: 'ix_salvas_usuario_criado_em']
+    (usuario_id, criado_em [desc], _id [desc]) [name: 'ix_salvas_usuario_criado_em']
   }
 }
 
@@ -233,8 +265,8 @@ Table seguidores [headercolor: #06B6D4, note: 'Perfis privados criam relação p
 
   indexes {
     (seguidor_id, seguido_id) [unique, name: 'uq_seguidores_par']
-    (seguido_id, status, solicitado_em [desc]) [name: 'ix_seguidores_recebidos']
-    (seguidor_id, status, atualizado_em [desc]) [name: 'ix_seguidores_enviados']
+    (seguido_id, status, solicitado_em [desc], _id [desc]) [name: 'ix_seguidores_recebidos']
+    (seguidor_id, status, atualizado_em [desc], _id [desc]) [name: 'ix_seguidores_enviados']
   }
 }
 
@@ -301,6 +333,8 @@ Table eventos_outbox [headercolor: #64748B, note: 'Eventos persistidos na mesma 
 
 Ref usuario_tecnologias: usuarios.stack_ids <> tecnologias._id
 Ref publicacao_autor: publicacoes.autor_id > usuarios._id
+Ref upload_usuario: uploads_midias.usuario_id > usuarios._id
+Ref upload_publicacao: uploads_midias.publicacao_id >? publicacoes._id
 Ref publicacao_midias_incorporadas: publicacao_midias.publicacao_id > publicacoes._id
 Ref comentario_publicacao: comentarios.publicacao_id > publicacoes._id
 Ref comentario_autor: comentarios.autor_id > usuarios._id
@@ -317,4 +351,3 @@ Ref notificacao_ator: notificacoes.ator_id >? usuarios._id
 Ref notificacao_publicacao: notificacoes.publicacao_id >? publicacoes._id
 Ref denuncia_denunciante: denuncias.denunciante_id > usuarios._id
 Ref denuncia_moderador: denuncias.moderador_id >? usuarios._id
-

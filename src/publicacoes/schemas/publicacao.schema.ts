@@ -44,19 +44,48 @@ export const PublicacaoMidiaSchema =
 
 @Schema({ _id: false })
 export class PublicacaoContadores {
-  @Prop({ type: Number, default: 0, min: 0 })
+  @Prop({
+    type: Number,
+    required: true,
+    default: 0,
+    min: 0,
+    validate: Number.isSafeInteger,
+  })
   upvotes: number;
 
-  @Prop({ type: Number, default: 0, min: 0 })
+  @Prop({
+    type: Number,
+    required: true,
+    default: 0,
+    min: 0,
+    validate: Number.isSafeInteger,
+  })
   downvotes: number;
 
-  @Prop({ type: Number, default: 0 })
+  @Prop({
+    type: Number,
+    required: true,
+    default: 0,
+    validate: Number.isSafeInteger,
+  })
   score: number;
 
-  @Prop({ type: Number, default: 0, min: 0 })
+  @Prop({
+    type: Number,
+    required: true,
+    default: 0,
+    min: 0,
+    validate: Number.isSafeInteger,
+  })
   comentarios: number;
 
-  @Prop({ type: Number, default: 0, min: 0 })
+  @Prop({
+    type: Number,
+    required: true,
+    default: 0,
+    min: 0,
+    validate: Number.isSafeInteger,
+  })
   salvamentos: number;
 }
 
@@ -180,6 +209,16 @@ PublicacaoSchema.pre('validate', function () {
     this.invalidate(
       'publicada_em',
       'Publicação publicada exige data de publicação.',
+    );
+  }
+  if (
+    this.contadores &&
+    this.contadores.score !==
+      this.contadores.upvotes - this.contadores.downvotes
+  ) {
+    this.invalidate(
+      'contadores.score',
+      'Score deve ser upvotes menos downvotes.',
     );
   }
 });
