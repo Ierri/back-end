@@ -1,5 +1,7 @@
 # IR — análise funcional e proposta de modelagem de dados
 
+> **Atualização:** análise preparatória histórica. Use o [contrato MongoDB](./contrato-banco.md) para o estado do código e as decisões de persistência revisadas em 21/11/2026.
+
 Data da análise: 08/11/2026  
 Revisão: 1.2 — alinhamento com o back-end implementado  
 Status: documento preparatório atualizado; a baseline oficial existente deve ser revisada antes de qualquer execução  

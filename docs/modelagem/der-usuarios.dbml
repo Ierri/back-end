@@ -2,7 +2,7 @@ Project ierri_modelagem_usuarios {
   database_type: 'MongoDB'
   Note: '''
     Modelo da coleção usuarios e sua relação com o catálogo de tecnologias.
-    Os campos marcados como propostos ainda não fazem parte da baseline implementada.
+    Estado de implementação e índices declarados: contrato-banco.md.
     DBML é usado como notação visual; arrays e subdocumentos representam estruturas MongoDB.
   '''
 }
@@ -56,7 +56,7 @@ Table usuarios [headercolor: #3B82F6, note: 'Coleção existente; campos de evol
   indexes {
     email [unique, name: 'uq_usuarios_email']
     username [unique, name: 'uq_usuarios_username']
-    (status, criado_em [desc]) [name: 'ix_usuarios_status_criado_em']
+    (status, criado_em [desc], _id [desc]) [name: 'ix_usuarios_status_criado_em']
     (papeis, status) [name: 'ix_usuarios_papeis_status']
   }
 }
@@ -73,8 +73,8 @@ Table tecnologias [headercolor: #10B981, note: 'Coleção proposta; catálogo co
 
   indexes {
     slug [unique, name: 'uq_tecnologias_slug']
+    (ativo, nome, _id) [name: 'ix_tecnologias_ativas_nome']
   }
 }
 
 Ref usuario_tecnologias: usuarios.stack_ids <> tecnologias._id
-

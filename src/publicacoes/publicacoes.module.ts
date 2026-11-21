@@ -18,6 +18,12 @@ import { PublicacoesCursor } from './publicacoes.cursor.js';
 import { PublicacoesService } from './publicacoes.service.js';
 import { RequiredAuthGuard } from './required-auth.guard.js';
 import { Publicacao, PublicacaoSchema } from './schemas/publicacao.schema.js';
+import { Voto, VotoSchema } from './schemas/voto.schema.js';
+import {
+  PublicacaoSalva,
+  PublicacaoSalvaSchema,
+} from './schemas/publicacao-salva.schema.js';
+import { Comentario, ComentarioSchema } from './schemas/comentario.schema.js';
 import {
   UploadMedia,
   UploadMediaSchema,
@@ -31,6 +37,9 @@ import { VideoProbeService } from './video-probe.service.js';
       { name: Publicacao.name, schema: PublicacaoSchema },
       { name: Usuario.name, schema: UsuarioSchema },
       { name: UploadMedia.name, schema: UploadMediaSchema },
+      { name: Voto.name, schema: VotoSchema },
+      { name: PublicacaoSalva.name, schema: PublicacaoSalvaSchema },
+      { name: Comentario.name, schema: ComentarioSchema },
     ]),
   ],
   controllers: [PublicacoesController, MediaController],

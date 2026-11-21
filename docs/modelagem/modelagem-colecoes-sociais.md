@@ -1,8 +1,10 @@
 # IR / Ierri — modelagem das coleções sociais
 
+> **Estado em 21/11/2026:** este documento preserva o desenho de domínio. Consulte o [contrato MongoDB](./contrato-banco.md) para implementação e índices reais. `publicacoes` e `uploads_midias` já constam da `staging`; schemas de `votos`, `publicacoes_salvas`, `seguidores`, `tecnologias` e `comentarios` foram adicionados nesta revisão. Não foi encontrado serviço ou API de `comentarios` na `staging` examinada. As demais coleções continuam propostas.
+
 **Tipo de artefato:** especificação conceitual, lógica e física  
 **Banco principal:** MongoDB  
-**Status:** proposta de modelagem; nenhuma coleção deste documento está declarada como implementada  
+**Status:** desenho de domínio; veja o contrato MongoDB para estado de implementação
 **Complemento:** [`modelagem-usuarios.md`](./modelagem-usuarios.md)  
 **DER completo:** [`der-completo.dbml`](./der-completo.dbml)
 
@@ -20,7 +22,7 @@ Este documento detalha as coleções:
 - `denuncias`;
 - `eventos_outbox`.
 
-Todas são propostas para evolução do produto. A única coleção confirmada no back-end atual é `usuarios`, documentada separadamente.
+O estado de implementação varia por coleção. `publicacoes` e `uploads_midias` existiam na `staging` analisada; os demais schemas desta revisão estão descritos no contrato MongoDB.
 
 ## 2. Princípios de modelagem
 
@@ -150,8 +152,8 @@ Invariantes de mídia:
 - vídeo exige `duracao_segundos`; dimensões são recomendadas;
 - `chave_storage` identifica o objeto físico e não deve ser exposta como credencial;
 - até 10 arquivos e 200 MB agregados;
-- imagens: JPEG, PNG ou WebP, até 10 MB cada;
-- vídeos: MP4/H.264 ou WebM, até 100 MB e 120 segundos cada;
+- imagens: JPEG, PNG ou WebP, até 25 MB cada no código atual;
+- vídeos: MP4 ou WebM, até 25 MB e 120 segundos cada no código atual;
 - MIME type, assinatura binária e tamanho precisam concordar.
 
 Mídias são incorporadas porque têm cardinalidade limitada, pertencem exclusivamente à publicação e são lidas junto dela. O bloco `publicacao_midias` no DER é apenas uma representação visual desse subdocumento.
@@ -521,5 +523,3 @@ Filtros de privacidade e status precisam ser aplicados antes de retornar os docu
 - Índices correspondem às consultas principais.
 - Exclusão lógica e física têm critérios explícitos.
 - Pendências de produto não são apresentadas como requisitos aprovados.
-
-

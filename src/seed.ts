@@ -3,6 +3,11 @@ import 'dotenv/config';
 import mongoose from 'mongoose';
 import { Usuario, UsuarioSchema } from './usuarios/schemas/usuario.schema.js';
 import {
+  Tecnologia,
+  TecnologiaSchema,
+} from './usuarios/schemas/tecnologia.schema.js';
+import { TECNOLOGIAS_INICIAIS } from './tecnologias-iniciais.js';
+import {
   buildSeedUser,
   readSeedConfig,
   SeedConfigurationError,
@@ -17,7 +22,9 @@ async function seed() {
       serverSelectionTimeoutMS: 10000,
     });
     const usuarios = mongoose.model(Usuario.name, UsuarioSchema);
+    const tecnologias = mongoose.model(Tecnologia.name, TecnologiaSchema);
     await usuarios.init();
+    await tecnologias.init();
 
     const usuario = new usuarios(await buildSeedUser(config));
     await usuario.validate();
@@ -26,6 +33,17 @@ async function seed() {
       { email: usuario.email },
       { $setOnInsert: usuario.toObject() },
       { upsert: true, runValidators: true },
+    );
+
+    await tecnologias.bulkWrite(
+      TECNOLOGIAS_INICIAIS.map((item) => ({
+        updateOne: {
+          filter: { slug: item.slug },
+          update: { $setOnInsert: { ...item, ativo: true } },
+          upsert: true,
+        },
+      })),
+      { ordered: true },
     );
 
     console.log(
