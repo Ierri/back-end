@@ -32,6 +32,14 @@ export const API_ERRORS = {
     status: HttpStatus.CONFLICT,
     message: 'E-mail ou username já cadastrado.',
   },
+  USERNAME_ALREADY_EXISTS: {
+    status: HttpStatus.CONFLICT,
+    message: 'Username já cadastrado.',
+  },
+  TECNOLOGIAS_INVALIDAS: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'Selecione apenas tecnologias existentes e ativas.',
+  },
   INVALID_CREDENTIALS: {
     status: HttpStatus.UNAUTHORIZED,
     message: 'E-mail ou senha inválidos.',

@@ -133,7 +133,7 @@ jobs:
       - name: Testes E2E com MongoDB, Redis e MinIO
         run: bun run test:e2e --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/ierri-e2e.json"
 
-      - name: Confirmar execução dos testes E2E de comentários e modelagem
+      - name: Confirmar execução dos testes E2E obrigatórios
         run: |
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
@@ -141,6 +141,7 @@ jobs:
           for (const { file, label, minimum } of [
             { file: 'comentarios.e2e-spec.ts', label: 'Comentários', minimum: 12 },
             { file: 'modelagem.e2e-spec.ts', label: 'Modelagem', minimum: 5 },
+            { file: 'perfis.e2e-spec.ts', label: 'Perfis e stacks', minimum: 12 },
           ]) {
             const suite = report.testResults.find(({ name }) => {
               const path = name.replaceAll('\\', '/');
