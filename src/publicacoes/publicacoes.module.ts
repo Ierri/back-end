@@ -49,5 +49,6 @@ import { VideoProbeService } from './video-probe.service.js';
     MediaCleanupService,
     { provide: MEDIA_VERIFIER, useClass: MongoMediaVerifierService },
   ],
+  exports: [OptionalAuthGuard, RequiredAuthGuard, PublicacoesCacheService],
 })
 export class PublicacoesModule {}
