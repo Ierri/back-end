@@ -108,7 +108,6 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
       await this.clearVoteClaim(publicationId, userId, claim.token).catch(() => undefined);
       return { valor, contadores };
     } catch {
-      await this.clearVoteClaim(publicationId, userId, claim.token).catch(() => undefined);
       await this.invalidate(publicationId, reservation.authorId);
       throw new ApiException('VOTO_OPERATION_PENDING');
     }
@@ -167,7 +166,6 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
           ...pair,
           $or: [
             { operacao: null },
-            { 'operacao.estado': 'aplicada' },
             { $expr: { $lte: ['$operacao.expira_em', '$$NOW'] } },
           ],
         },

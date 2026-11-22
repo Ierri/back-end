@@ -70,8 +70,11 @@ function setup() {
       }
       return query({ modifiedCount: 0 });
     }),
-    findOneAndUpdate: vi.fn((_filter: Record<string, any>, update: Record<string, any>[]) => {
-      if (!vote || (vote.operacao && vote.operacao.expira_em > new Date())) return query(null);
+    findOneAndUpdate: vi.fn((filter: Record<string, any>, update: Record<string, any>[]) => {
+      if (!vote || (vote.operacao && vote.operacao.expira_em > new Date() &&
+        !(vote.operacao.estado === 'aplicada' && filter.$or?.some(
+          (condition: Record<string, unknown>) => condition['operacao.estado'] === 'aplicada',
+        )))) return query(null);
       vote.revisao++;
       vote.operacao = {
         token: update[0].$set.operacao.token,
@@ -182,9 +185,15 @@ describe('votos: transições e projeção', () => {
     expect(currentVote()?.valor).toBe(1);
     expect(post.votos_projecao_pendente).toBe(true);
     expect(post.votos_operacoes_pendentes).toHaveLength(1);
+    const token = currentVote()?.operacao?.token;
+    const expiresAt = currentVote()?.operacao?.expira_em;
+    expect(currentVote()?.operacao?.estado).toBe('aplicada');
+    expect(post.votos_operacoes_pendentes[0].token).toBe(token);
     await expect(service.put(publicationId.toString(), userId.toString(), -1))
       .rejects.toMatchObject({ status: 503 });
     expect(currentVote()?.valor).toBe(1);
+    expect(currentVote()?.operacao).toMatchObject({ token, expira_em: expiresAt, estado: 'aplicada' });
+    expect(post.votos_operacoes_pendentes[0].token).toBe(token);
   });
 
   it('leaves the projection dirty if reconciliation fails after the vote changed', async () => {
@@ -200,7 +209,33 @@ describe('votos: transições e projeção', () => {
     expect(currentVote()?.valor).toBe(-1);
     expect(post.votos_projecao_pendente).toBe(true);
     expect(post.votos_operacoes_pendentes).toHaveLength(0);
+    expect(currentVote()?.operacao?.estado).toBe('aplicada');
     expect(post.contadores).toEqual({ upvotes: 0, downvotes: 0, score: 0 });
+  });
+
+  it('keeps a completed vote fenced until expiry when clearing its token fails', async () => {
+    const { service, voteModel, currentVote, post } = setup();
+    const normal = voteModel.updateOne.getMockImplementation()!;
+    let failClear = true;
+    voteModel.updateOne.mockImplementation((filter, update, options) => {
+      if (failClear && update.$set?.operacao === null) {
+        failClear = false;
+        return query(Promise.reject(new Error('clear unavailable')));
+      }
+      return normal(filter, update, options);
+    });
+    await expect(service.put(publicationId.toString(), userId.toString(), 1))
+      .resolves.toMatchObject({ valor: 1 });
+    const token = currentVote()?.operacao?.token;
+    expect(currentVote()?.operacao?.estado).toBe('aplicada');
+    await expect(service.put(publicationId.toString(), userId.toString(), -1))
+      .rejects.toMatchObject({ status: 503 });
+    expect(currentVote()?.operacao?.token).toBe(token);
+    expect(post.contadores).toEqual({ upvotes: 1, downvotes: 0, score: 1 });
+    currentVote()!.operacao!.expira_em = new Date(0);
+    await expect(service.put(publicationId.toString(), userId.toString(), -1))
+      .resolves.toMatchObject({ valor: -1 });
+    expect(post.contadores).toEqual({ upvotes: 0, downvotes: 1, score: -1 });
   });
 
   it('rejects a second operation for the same user while the first is pending', async () => {

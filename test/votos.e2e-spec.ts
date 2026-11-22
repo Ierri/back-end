@@ -384,8 +384,18 @@ describe.runIf(config)('votos com MongoDB, Redis e MinIO locais', () => {
     expect((await votes())).toHaveLength(1);
     expect((await votes())[0].valor).toBe(1);
     expect((await postDocument())!.votos_projecao_pendente).toBe(true);
+    const firstVote = (await votes())[0];
+    const firstToken = firstVote.operacao.token as string;
+    const firstExpiry = firstVote.operacao.expira_em as Date;
+    expect(firstVote.operacao.estado).toBe('aplicada');
+    expect((await postDocument())!.votos_operacoes_pendentes[0].token).toBe(firstToken);
     await put(tokenB, -1).expect(503);
-    expect((await votes())[0].valor).toBe(1);
+    const blockedVote = (await votes())[0];
+    expect(blockedVote.valor).toBe(1);
+    expect(blockedVote.operacao).toMatchObject({
+      token: firstToken, expira_em: firstExpiry, estado: 'aplicada',
+    });
+    expect((await postDocument())!.votos_operacoes_pendentes[0].token).toBe(firstToken);
     await connection.db!.collection('votos').updateOne(
       { publicacao_id: new Types.ObjectId(postId), usuario_id: new Types.ObjectId(readerId) },
       { $set: { 'operacao.expira_em': new Date(0) } },
@@ -400,6 +410,8 @@ describe.runIf(config)('votos com MongoDB, Redis e MinIO locais', () => {
     await votosService.recoverPendingBatch();
     await expectState(1, 0);
     expect((await postDocument())!.votos_projecao_pendente).toBe(false);
+    expect((await postDocument())!.votos_operacoes_pendentes).toHaveLength(0);
+    expect((await votes())[0].operacao).toBeNull();
     await put(tokenB, 1).expect(200);
     await expectState(1, 0);
   });
