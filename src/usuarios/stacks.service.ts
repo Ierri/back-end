@@ -36,7 +36,7 @@ export class UsuariosStacksService {
 
     const updated = await this.usuarios
       .findOneAndUpdate(
-        { _id: new Types.ObjectId(userId) },
+        { _id: new Types.ObjectId(userId), status: 'ativo' },
         { $set: { stack_ids: ids } },
         { returnDocument: 'after', runValidators: true },
       )

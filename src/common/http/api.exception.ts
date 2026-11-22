@@ -56,6 +56,10 @@ export const API_ERRORS = {
     status: HttpStatus.UNAUTHORIZED,
     message: 'Token inválido ou expirado.',
   },
+  AUTH_STATUS_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message: 'Não foi possível validar a conta agora. Tente novamente mais tarde.',
+  },
   PUBLICACAO_NOT_FOUND: {
     status: HttpStatus.NOT_FOUND,
     message: 'Publicação não encontrada.',

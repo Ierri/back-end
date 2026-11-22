@@ -60,7 +60,7 @@ describe('seleção de stacks do usuário', () => {
     expect(technologies.find).toHaveBeenCalledWith({ _id: { $in: ids }, ativo: true });
     expect(technologyQuery.limit).toHaveBeenCalledWith(2);
     expect(users.findOneAndUpdate).toHaveBeenCalledWith(
-      { _id: new Types.ObjectId(userId) },
+      { _id: new Types.ObjectId(userId), status: 'ativo' },
       { $set: { stack_ids: ids } },
       { returnDocument: 'after', runValidators: true },
     );
@@ -84,5 +84,17 @@ describe('seleção de stacks do usuário', () => {
     const { service, userQuery } = setup();
     userQuery.exec.mockResolvedValue(null);
     await expect(service.replace(new Types.ObjectId().toString(), [])).rejects.toBeInstanceOf(ApiException);
+  });
+
+  it('does not replace stacks after the account status changes before the atomic write', async () => {
+    const { service, users, userQuery } = setup();
+    const userId = new Types.ObjectId().toString();
+    userQuery.exec.mockResolvedValue(null);
+    await expect(service.replace(userId, [])).rejects.toMatchObject({
+      response: { code: 'AUTH_REQUIRED' },
+    });
+    expect(users.findOneAndUpdate.mock.calls[0][0]).toEqual({
+      _id: new Types.ObjectId(userId), status: 'ativo',
+    });
   });
 });

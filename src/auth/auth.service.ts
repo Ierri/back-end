@@ -2,11 +2,16 @@ import { randomBytes } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { compare, hash } from 'bcryptjs';
+import { Types } from 'mongoose';
 import { UsuariosService } from '../usuarios/usuarios.service.js';
-import type { UsuarioDocument } from '../usuarios/schemas/usuario.schema.js';
+import type { Usuario } from '../usuarios/schemas/usuario.schema.js';
 import type { CheckEmailDto, LoginDto, RegisterDto } from './dto/auth.dto.js';
 import { ApiException } from '../common/http/api.exception.js';
 import { SessionPersistenceError, SessoesService } from './sessoes.service.js';
+
+type AuthUser = Pick<Usuario, 'nome' | 'email' | 'username' | 'biografia' | 'avatar_url' | 'criado_em'> & {
+  _id: Types.ObjectId;
+};
 
 @Injectable()
 export class AuthService {
@@ -51,12 +56,18 @@ export class AuthService {
   }
 
   async login({ email, password }: LoginDto) {
-    const usuario = await this.usuarios.findCredentials(email);
+    let usuario;
+    try {
+      usuario = await this.usuarios.findCredentials(email);
+    } catch {
+      throw new ApiException('AUTH_STATUS_UNAVAILABLE');
+    }
     if (!usuario) throw new ApiException('INVALID_CREDENTIALS');
     const valid = await compare(password, usuario.senha_hash);
     if (!valid) {
       throw new ApiException('INVALID_CREDENTIALS');
     }
+    if (usuario.status !== 'ativo') throw new ApiException('INVALID_CREDENTIALS');
     return this.authenticate(usuario);
   }
 
@@ -66,7 +77,7 @@ export class AuthService {
     return this.toPublicUser(usuario);
   }
 
-  private async authenticate(usuario: UsuarioDocument) {
+  private async authenticate(usuario: AuthUser) {
     const usuarioId = usuario._id.toString();
     const id = randomBytes(32).toString('base64url');
     const accessToken = await this.jwt.signAsync({ sub: usuarioId, sid: id });
@@ -81,7 +92,7 @@ export class AuthService {
     };
   }
 
-  private toPublicUser(usuario: UsuarioDocument) {
+  private toPublicUser(usuario: AuthUser) {
     return {
       id: usuario._id.toString(),
       name: usuario.nome,
