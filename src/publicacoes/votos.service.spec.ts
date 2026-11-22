@@ -1,9 +1,9 @@
-import { Types } from 'mongoose';
+import { Types, model } from 'mongoose';
 import type { Model } from 'mongoose';
 import { Usuario } from '../usuarios/schemas/usuario.schema.js';
 import type { PublicacoesCacheService } from './publicacoes-cache.service.js';
 import { Publicacao } from './schemas/publicacao.schema.js';
-import { Voto } from './schemas/voto.schema.js';
+import { Voto, VotoSchema } from './schemas/voto.schema.js';
 import { VotosService } from './votos.service.js';
 
 const publicationId = new Types.ObjectId();
@@ -292,6 +292,64 @@ describe('votos: transições e projeção', () => {
       expect(voteModel.updateOne.mock.lastCall?.[2]).toMatchObject({ upsert: true, timestamps: false });
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe('votos: execução da query pelo Mongoose', () => {
+  it('executes the claim pipeline with Mongoose 9 after the atomic upsert', async () => {
+    const voteModel = model('VotoPipelineRegression', VotoSchema);
+    const collection = voteModel.collection as unknown as {
+      updateOne: (...args: unknown[]) => Promise<unknown>;
+      findOneAndUpdate: (...args: unknown[]) => Promise<unknown>;
+    };
+    const originalUpsert = collection.updateOne;
+    const originalClaim = collection.findOneAndUpdate;
+    let upsertUpdate: Record<string, any> | undefined;
+    let claimPipeline: Record<string, any>[] | undefined;
+    collection.updateOne = async (_filter, update) => {
+      upsertUpdate = update as Record<string, any>;
+      return { acknowledged: true, matchedCount: 0, modifiedCount: 0, upsertedCount: 1 };
+    };
+    collection.findOneAndUpdate = async (_filter, update) => {
+      claimPipeline = update as Record<string, any>[];
+      return {
+        _id: new Types.ObjectId(),
+        publicacao_id: publicationId,
+        usuario_id: userId,
+        valor: null,
+        revisao: 1,
+        operacao: {
+          token: claimPipeline[0].$set.operacao.token,
+          expira_em: new Date(Date.now() + 120_000),
+          estado: 'reservada',
+        },
+      };
+    };
+    try {
+      const service = new VotosService(
+        voteModel as Model<Voto>,
+        {} as Model<Publicacao>,
+        {} as Model<Usuario>,
+        {} as PublicacoesCacheService,
+      );
+      const claim = await (service as unknown as {
+        claimVote: (publicationId: string, userId: string) => Promise<{
+          token: string;
+          revision: number;
+          expiresAt: Date;
+        }>;
+      }).claimVote(publicationId.toString(), userId.toString());
+      expect(upsertUpdate?.$setOnInsert).toMatchObject({
+        criado_em: expect.any(Date),
+        atualizado_em: expect.any(Date),
+      });
+      expect(claimPipeline).toHaveLength(1);
+      expect(claimPipeline?.[0].$set.operacao.expira_em.$dateAdd.startDate).toBe('$$NOW');
+      expect(claim).toMatchObject({ token: expect.any(String), revision: 1, expiresAt: expect.any(Date) });
+    } finally {
+      collection.updateOne = originalUpsert;
+      collection.findOneAndUpdate = originalClaim;
     }
   });
 });

@@ -179,7 +179,7 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
           },
           revisao: { $add: [{ $ifNull: ['$revisao', 0] }, 1] },
         } }],
-        { new: true, timestamps: false },
+        { new: true, timestamps: false, updatePipeline: true },
       ).exec();
     } catch {
       throw new ApiException('VOTO_WRITE_UNAVAILABLE');
