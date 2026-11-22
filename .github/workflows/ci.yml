@@ -20,7 +20,7 @@ jobs:
   checks:
     name: Lint, TypeScript, testes e build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       mongodb:
         image: mongo:7
@@ -45,6 +45,12 @@ jobs:
       REDIS_URL: redis://127.0.0.1:6379
       REDIS_SESSION_PREFIX: "ierri:ci:session:"
       JWT_SECRET: ci-only-test-key-not-for-deployment-32-bytes
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY_ID: ierri-ci-local
+      S3_BUCKET: ierri-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      S3_FORCE_PATH_STYLE: "true"
+      MEDIA_PUBLIC_BASE_URL: http://127.0.0.1:3001
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -74,8 +80,83 @@ jobs:
       - name: Testes
         run: bun run test
 
-      - name: Testes com MongoDB
-        run: bun run test:e2e
+      - name: Iniciar MinIO local e criar bucket de teste
+        run: |
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "$RUNNER_TEMP/ierri-minio" \
+            https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z
+          printf '%s  %s\n' \
+            7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f \
+            "$RUNNER_TEMP/ierri-minio" | sha256sum --check --
+          chmod +x "$RUNNER_TEMP/ierri-minio"
+          export S3_SECRET_ACCESS_KEY="$(openssl rand -hex 24)"
+          echo "::add-mask::$S3_SECRET_ACCESS_KEY"
+          echo "S3_SECRET_ACCESS_KEY=$S3_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
+          MINIO_ROOT_USER="$S3_ACCESS_KEY_ID" \
+            MINIO_ROOT_PASSWORD="$S3_SECRET_ACCESS_KEY" \
+            nohup "$RUNNER_TEMP/ierri-minio" server "$RUNNER_TEMP/ierri-minio-data" \
+              --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 \
+              > "$RUNNER_TEMP/ierri-minio.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/ierri-minio.pid"
+          ready=false
+          for attempt in {1..30}; do
+            if curl --fail --silent --output /dev/null http://127.0.0.1:9000/minio/health/ready; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != true ]; then
+            cat "$RUNNER_TEMP/ierri-minio.log"
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import { S3Client, CreateBucketCommand, HeadBucketCommand } from '@aws-sdk/client-s3';
+          const client = new S3Client({
+            endpoint: process.env.S3_ENDPOINT,
+            region: process.env.S3_REGION,
+            credentials: {
+              accessKeyId: process.env.S3_ACCESS_KEY_ID,
+              secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+            },
+            forcePathStyle: true,
+            maxAttempts: 2,
+          });
+          try {
+            await client.send(new CreateBucketCommand({ Bucket: process.env.S3_BUCKET }));
+            await client.send(new HeadBucketCommand({ Bucket: process.env.S3_BUCKET }));
+          } finally {
+            client.destroy();
+          }
+          NODE
+
+      - name: Testes E2E com MongoDB, Redis e MinIO
+        run: bun run test:e2e --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/ierri-e2e.json"
+
+      - name: Confirmar execução dos testes E2E de comentários
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const report = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/ierri-e2e.json`, 'utf8'));
+          const suite = report.testResults.find(({ name }) => {
+            const path = name.replaceAll('\\', '/');
+            return path === 'test/comentarios.e2e-spec.ts' || path.endsWith('/test/comentarios.e2e-spec.ts');
+          });
+          const tests = suite?.assertionResults ?? [];
+          const passed = tests.filter(({ status }) => status === 'passed').length;
+          if (tests.length < 12 || passed !== tests.length) {
+            console.error(`Comentários E2E: ${passed}/${tests.length} testes aprovados; a suíte foi ignorada ou está incompleta.`);
+            process.exit(1);
+          }
+          console.log(`Comentários E2E: ${passed} testes executados e aprovados.`);
+          NODE
 
       - name: Build de produção
         run: bun run build
+
+      - name: Encerrar MinIO de teste
+        if: ${{ always() }}
+        run: |
+          if [ -f "$RUNNER_TEMP/ierri-minio.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/ierri-minio.pid")" || true
+          fi
