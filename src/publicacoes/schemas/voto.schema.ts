@@ -2,6 +2,20 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Schema as MongooseSchema, Types } from 'mongoose';
 import type { HydratedDocument } from 'mongoose';
 
+@Schema({ _id: false })
+export class VotoOperacao {
+  @Prop({ type: String, required: true })
+  token: string;
+
+  @Prop({ type: Date, required: true })
+  expira_em: Date;
+
+  @Prop({ type: String, required: true, enum: ['reservada', 'aplicada'] })
+  estado: 'reservada' | 'aplicada';
+}
+
+export const VotoOperacaoSchema = SchemaFactory.createForClass(VotoOperacao);
+
 @Schema({
   collection: 'votos',
   timestamps: { createdAt: 'criado_em', updatedAt: 'atualizado_em' },
@@ -13,8 +27,14 @@ export class Voto {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Usuario', required: true, immutable: true })
   usuario_id: Types.ObjectId;
 
-  @Prop({ type: Number, required: true, enum: [1, -1] })
-  valor: 1 | -1;
+  @Prop({ type: Number, enum: [1, -1], default: null })
+  valor: 1 | -1 | null;
+
+  @Prop({ type: Number, default: 0, min: 0 })
+  revisao: number;
+
+  @Prop({ type: VotoOperacaoSchema, default: null })
+  operacao: VotoOperacao | null;
 
   criado_em: Date;
   atualizado_em: Date;
