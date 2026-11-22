@@ -1,11 +1,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Types } from 'mongoose';
+import { Schema as MongooseSchema, Types } from 'mongoose';
 import type { HydratedDocument } from 'mongoose';
 import { MAX_MEDIA_SIZE_BYTES } from '../media-verifier.js';
 
 @Schema()
 export class PublicacaoMidia {
-  @Prop({ type: Types.ObjectId, default: () => new Types.ObjectId() })
+  @Prop({ type: MongooseSchema.Types.ObjectId, default: () => new Types.ObjectId() })
   _id: Types.ObjectId;
 
   @Prop({ type: String, required: true, enum: ['imagem', 'video'] })
@@ -133,7 +133,7 @@ export class Publicacao {
   slug: string;
 
   @Prop({
-    type: Types.ObjectId,
+    type: MongooseSchema.Types.ObjectId,
     ref: 'Usuario',
     required: true,
     immutable: true,

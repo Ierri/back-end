@@ -101,7 +101,7 @@ describe('comentários: validação, hierarquia e consistência', () => {
     const ValidationModel = model('ComentarioValidation', ComentarioSchema);
     await expect(new ValidationModel(comment()).validate()).resolves.toBeUndefined();
     await expect(new ValidationModel(comment({ profundidade: 1, comentario_pai_id: rootId, comentario_raiz_id: null })).validate()).rejects.toThrow();
-    await expect(new ValidationModel(comment({ profundidade: 2, comentario_pai_id: replyId, comentario_raiz_id: rootId })).validate()).resolves.toBeUndefined();
+    await expect(new ValidationModel(comment({ _id: new Types.ObjectId(), profundidade: 2, comentario_pai_id: replyId, comentario_raiz_id: rootId })).validate()).resolves.toBeUndefined();
     expect(ComentarioSchema.path('autor_id').options.immutable).toBe(true);
     expect(ComentarioSchema.path('publicacao_id').options.immutable).toBe(true);
     expect(ComentarioSchema.path('comentario_pai_id').options.immutable).toBe(true);

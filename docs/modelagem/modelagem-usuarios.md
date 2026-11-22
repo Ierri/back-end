@@ -2,7 +2,7 @@
 
 **Tipo de artefato:** especificação conceitual, lógica e física  
 **Banco principal:** MongoDB  
-**Status:** proposta de modelagem; não representa implementação automática  
+**Status:** schema social consolidado; fluxos de produto ainda parciais
 **Escopo:** conta, perfil público e atributos de controle do usuário
 
 **Visualização recomendada:** importar [`der-completo.dbml`](./der-completo.dbml) em [dbdiagram.io](https://dbdiagram.io). [`der-usuarios.dbml`](./der-usuarios.dbml) mantém a visão isolada desta coleção.
@@ -18,7 +18,7 @@ Publicações, comentários, votos, itens salvos, seguidores, notificações e d
 Esta especificação está dividida em dois estados:
 
 - **Baseline existente:** campos e índices identificados no back-end atual. Devem ser preservados para manter compatibilidade.
-- **Evolução proposta:** estrutura recomendada para o domínio social. Sua adoção depende do planejamento da equipe responsável pelo back-end.
+- **Schema consolidado:** campos sociais persistidos com valores padrão para documentos anteriores. As regras de acesso e atualização ainda dependem dos respectivos serviços.
 
 Não fazem parte desta baseline: OAuth, OTP, refresh token, dados de sessão, posts ou listas de seguidores incorporadas. A sessão atual é temporária e pertence ao Redis, não ao documento do usuário.
 
@@ -101,19 +101,19 @@ As cardinalidades representam o domínio completo. Nesta etapa, apenas `usuarios
 | `senha_hash` | `String` | Sim na baseline local | — | Dado confidencial; nunca retornar na API |
 | `biografia` | `String \| null` | Não | `null` | Texto curto de apresentação |
 | `avatar_url` | `String \| null` | Não | `null` | URL ou referência de leitura; não armazena o arquivo |
-| `stack_ids` | `ObjectId[]` | Sim na evolução | `[]` | Referências únicas a `tecnologias`; array limitado |
-| `visibilidade_perfil` | `Enum` | Sim na evolução | `publico` | Somente `publico` ou `privado` |
-| `papeis` | `Enum[]` | Sim na evolução | `["usuario"]` | Valores únicos; deve conter ao menos um papel |
-| `status` | `Enum` | Sim na evolução | `ativo` | Controla acesso e ciclo de vida da conta |
-| `contadores.publicacoes` | `Int >= 0` | Sim na evolução | `0` | Projeção derivada de publicações válidas |
-| `contadores.seguidores` | `Int >= 0` | Sim na evolução | `0` | Projeção de relações aceitas recebidas |
-| `contadores.seguindo` | `Int >= 0` | Sim na evolução | `0` | Projeção de relações aceitas originadas |
-| `contadores.score` | `Int` | Sim na evolução | `0` | Soma derivada do score das publicações do usuário |
+| `stack_ids` | `ObjectId[]` | Sim no schema | `[]` | Até 20 referências distintas; existência e atividade dependem do futuro serviço de perfil |
+| `visibilidade_perfil` | `Enum` | Sim no schema | `publico` | Somente `publico` ou `privado`; ainda não controla leitura do perfil |
+| `papeis` | `Enum[]` | Sim no schema | `["usuario"]` | Valores únicos; deve conter ao menos um papel |
+| `status` | `Enum` | Sim no schema | `ativo` | Ainda não bloqueia autenticação ou sessões |
+| `contadores.publicacoes` | `Int >= 0` | Sim no schema | `0` | Projeção ainda não mantida pelos serviços |
+| `contadores.seguidores` | `Int >= 0` | Sim no schema | `0` | Projeção ainda não mantida pelos serviços |
+| `contadores.seguindo` | `Int >= 0` | Sim no schema | `0` | Projeção ainda não mantida pelos serviços |
+| `contadores.score` | `Int` | Sim no schema | `0` | Projeção ainda não mantida pelos serviços |
 | `email_verificado_em` | `Date \| null` | Não | `null` | Preenchido quando houver verificação real de e-mail |
 | `termos_aceitos_em` | `Date \| null` | Não | `null` | Data do aceite aplicável |
 | `versao_termos_aceita` | `String \| null` | Não | `null` | Versão associada ao aceite; deve acompanhar a data |
 | `criado_em` | `Date` | Sim | Data atual | Imutável após criação |
-| `atualizado_em` | `Date` | Sim na evolução | Data atual | Atualizado em alterações persistentes do documento |
+| `atualizado_em` | `Date` | Sim no schema | Data atual | Atualizado em alterações persistentes do documento |
 | `excluido_em` | `Date \| null` | Não | `null` | Obrigatório logicamente quando `status = excluido` |
 
 ### Limites propostos que dependem de validação do produto
@@ -126,7 +126,7 @@ As cardinalidades representam o domínio completo. Nesta etapa, apenas `usuarios
 | `stack_ids` | Até 20 referências |
 | `papeis` | Até 3 valores distintos |
 
-Os limites acima são recomendações de modelagem, não regras já aprovadas ou implementadas.
+O limite de 20 `stack_ids` e a unicidade de `papeis` estão no schema. Os demais limites permanecem recomendações de produto.
 
 ## 6. Estados e invariantes
 
@@ -160,7 +160,7 @@ Invariantes:
 
 Esses índices dão suporte ao login, à verificação de e-mail e à localização do perfil. Como os valores são normalizados antes da persistência, a unicidade é efetivamente insensível a maiúsculas e minúsculas.
 
-### Evolução proposta
+### Índices administrativos propostos, ainda não criados
 
 ```javascript
 { status: 1, criado_em: -1 }
@@ -205,8 +205,8 @@ Atualizações concorrentes devem ser atômicas. A equipe também deve prever re
 | Autenticar por e-mail | `{ email: 1 }` único |
 | Abrir perfil por username | `{ username: 1 }` único |
 | Obter usuário por identificador | `_id` padrão |
-| Listar contas por status | `{ status: 1, criado_em: -1 }` |
-| Localizar equipe de moderação ativa | `{ papeis: 1, status: 1 }` |
+| Listar contas por status | Índice proposto; API não implementada |
+| Localizar equipe de moderação ativa | Índice proposto; API não implementada |
 | Pesquisar criadores | Estratégia de busca ainda a definir |
 
 ## 11. Segurança e privacidade
@@ -234,9 +234,9 @@ Atualizações concorrentes devem ser atômicas. A equipe também deve prever re
 | `biografia`, `avatar_url` | Existentes e opcionais |
 | `criado_em` | Existente |
 | Índices únicos de `email` e `username` | Existentes |
-| Demais campos deste documento | Evolução proposta |
+| `stack_ids`, visibilidade, papéis, status, contadores e datas sociais | Schema implementado com valores padrão; sem novos contratos HTTP |
 
-Não se propõe criar uma coleção paralela `users` nem renomear os campos atuais. Caso a evolução seja aprovada, documentos antigos precisarão de valores padrão ou de uma migração controlada antes de regras obrigatórias serem ativadas.
+Não foi criada coleção paralela `users` nem renomeados os campos atuais. Documentos antigos recebem valores padrão na hidratação; a migração de dados reais dependerá de validação separada.
 
 ## 13. Decisões pendentes
 
