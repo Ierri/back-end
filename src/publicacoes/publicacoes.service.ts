@@ -88,7 +88,7 @@ export class PublicacoesService {
           position,
           viewerId,
         );
-        await this.cache.writePage(address, fresh.shared);
+        if (fresh.cacheable) await this.cache.writePage(address, fresh.shared);
         return fresh.viewer;
       };
       return viewerId ? load() : this.cache.coalesce(address.key, load);
@@ -161,6 +161,11 @@ export class PublicacoesService {
     return {
       shared,
       viewer: viewerId ? { ...shared, items: viewerItems } : shared,
+      cacheable: page.every(
+        (post) =>
+          !post.votos_projecao_pendente &&
+          !post.votos_operacoes_pendentes?.length,
+      ),
     };
   }
 
@@ -269,7 +274,7 @@ export class PublicacoesService {
       const load = async () => {
         this.cache.countMongoAfterMiss();
         const fresh = await this.loadById(id, viewerId);
-        if (fresh.shared.visibilidade === 'publico')
+        if (fresh.cacheable && fresh.shared.visibilidade === 'publico')
           await this.cache.writePost(address, fresh.shared);
         return fresh.viewer;
       };
@@ -297,6 +302,9 @@ export class PublicacoesService {
     return {
       shared: this.toResponse(publication, author),
       viewer: this.toResponse(publication, author, viewerId),
+      cacheable:
+        !publication.votos_projecao_pendente &&
+        !publication.votos_operacoes_pendentes?.length,
     };
   }
 
@@ -355,7 +363,7 @@ export class PublicacoesService {
     const ids = cached.map((item) => new Types.ObjectId(item.id));
     const stored = await this.publicacoes
       .find({ _id: { $in: ids } })
-      .select('_id status visibilidade autor_id publicada_em atualizada_em')
+      .select('_id status visibilidade autor_id publicada_em atualizada_em votos_projecao_pendente votos_operacoes_pendentes')
       .lean()
       .exec();
     if (stored.length !== cached.length) return null;
@@ -366,6 +374,8 @@ export class PublicacoesService {
         !current ||
         current.status !== 'publicada' ||
         current.visibilidade !== 'publico' ||
+        Boolean(current.votos_projecao_pendente) ||
+        Boolean(current.votos_operacoes_pendentes?.length) ||
         current.autor_id.toString() !== item.autor.id ||
         (authorId && current.autor_id.toString() !== authorId) ||
         current.publicada_em?.getTime() !== item.publicadaEm.getTime() ||

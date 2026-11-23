@@ -795,4 +795,65 @@ describe('publicações: privacidade da biografia', () => {
     expect(cache.countStaleMiss).toHaveBeenCalledOnce();
     expect(cache.writePage.mock.calls[0][1].items[0].autor.biografia).toBeNull();
   });
+
+  it('does not reuse or fill public cache while a vote projection is pending', async () => {
+    const { service, publications, saved, cache } = setup();
+    saved.atualizada_em = new Date('2026-11-22T10:00:00.000Z');
+    const oldResponse = await service.findById(saved._id.toString());
+    saved.votos_operacoes_pendentes.push({
+      usuario_id: new Types.ObjectId(),
+      token: 'pending-vote',
+      expira_em: new Date(Date.now() + 120_000),
+    });
+    publications.find.mockReturnValue(query([saved]));
+    cache.postAddress.mockResolvedValue({ key: 'post-cache' });
+    cache.readPost.mockResolvedValue(oldResponse);
+
+    await service.findById(saved._id.toString());
+    expect(cache.countHit).not.toHaveBeenCalled();
+    expect(cache.writePost).not.toHaveBeenCalled();
+
+    cache.pageAddress.mockResolvedValue({ key: 'page-cache' });
+    cache.readPage.mockResolvedValue({ items: [oldResponse], nextCursor: null, hasMore: false });
+    await service.list({ limite: 20 });
+    expect(cache.writePage).not.toHaveBeenCalled();
+  });
+
+  it('keeps detail and list cache disabled after a vote reservation is released until reconciliation', async () => {
+    const { service, publications, saved, cache } = setup();
+    saved.atualizada_em = new Date('2026-11-22T10:00:00.000Z');
+    const oldResponse = await service.findById(saved._id.toString());
+    const oldPage = { items: [oldResponse], nextCursor: null, hasMore: false };
+    saved.votos_projecao_pendente = true;
+    publications.find.mockReturnValue(query([saved]));
+    cache.postAddress.mockResolvedValue({ key: 'post-cache' });
+    cache.readPost.mockResolvedValue(oldResponse);
+    cache.pageAddress.mockResolvedValue({ key: 'page-cache' });
+    cache.readPage.mockResolvedValue(oldPage);
+
+    const detail = await service.findById(saved._id.toString());
+    const page = await service.list({ limite: 20 });
+    expect(detail.id).toBe(saved._id.toString());
+    expect(page.items).toHaveLength(1);
+    expect(cache.countHit).not.toHaveBeenCalled();
+    expect(cache.writePost).not.toHaveBeenCalled();
+    expect(cache.writePage).not.toHaveBeenCalled();
+
+    saved.votos_projecao_pendente = false;
+    saved.contadores.upvotes = 1;
+    saved.contadores.score = 1;
+    saved.atualizada_em = new Date('2026-11-22T10:00:01.000Z');
+    const reconciledDetail = await service.findById(saved._id.toString());
+    const reconciledPage = await service.list({ limite: 20 });
+    expect(reconciledDetail.contadores.upvotes).toBe(1);
+    expect(reconciledPage.items[0].contadores.score).toBe(1);
+    expect(cache.writePost.mock.calls[0][1].contadores.upvotes).toBe(1);
+    expect(cache.writePage.mock.calls[0][1].items[0].contadores.score).toBe(1);
+
+    cache.readPost.mockResolvedValue(cache.writePost.mock.calls[0][1]);
+    cache.readPage.mockResolvedValue(cache.writePage.mock.calls[0][1]);
+    await service.findById(saved._id.toString());
+    await service.list({ limite: 20 });
+    expect(cache.countHit).toHaveBeenCalledTimes(2);
+  });
 });

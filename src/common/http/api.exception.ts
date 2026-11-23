@@ -60,6 +60,18 @@ export const API_ERRORS = {
     status: HttpStatus.NOT_FOUND,
     message: 'Publicação não encontrada.',
   },
+  VOTO_USER_INACTIVE: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'Esta conta não pode votar.',
+  },
+  VOTO_OPERATION_PENDING: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message: 'A operação do voto ainda não foi concluída. Tente novamente mais tarde.',
+  },
+  VOTO_WRITE_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message: 'Não foi possível salvar o voto agora. Tente novamente mais tarde.',
+  },
   COMENTARIO_NOT_FOUND: {
     status: HttpStatus.NOT_FOUND,
     message: 'Comentário não encontrado.',
