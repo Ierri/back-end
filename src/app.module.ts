@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { UsuariosModule } from './usuarios/usuarios.module.js';
 import { ApiHttpModule } from './common/http/api-http.module.js';
 import { PublicacoesModule } from './publicacoes/publicacoes.module.js';
+import { ComentariosModule } from './comentarios/comentarios.module.js';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { PublicacoesModule } from './publicacoes/publicacoes.module.js';
     UsuariosModule,
     AuthModule,
     PublicacoesModule,
+    ComentariosModule,
   ],
   controllers: [AppController],
   providers: [AppService],

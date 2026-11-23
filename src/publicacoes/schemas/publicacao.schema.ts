@@ -163,6 +163,12 @@ export class Publicacao {
   @Prop({ type: PublicacaoContadoresSchema, default: () => ({}) })
   contadores: PublicacaoContadores;
 
+  @Prop({ type: Number, default: 0, min: 0 })
+  comentarios_revisao: number;
+
+  @Prop({ type: [String], default: [] })
+  comentarios_operacoes_pendentes: string[];
+
   @Prop({ type: Date, default: null })
   publicada_em: Date | null;
 

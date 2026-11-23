@@ -52,6 +52,26 @@ export const API_ERRORS = {
     status: HttpStatus.NOT_FOUND,
     message: 'Publicação não encontrada.',
   },
+  COMENTARIO_NOT_FOUND: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'Comentário não encontrado.',
+  },
+  COMENTARIO_DEPTH_EXCEEDED: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'Profundidade máxima de respostas excedida.',
+  },
+  COMENTARIO_WRITE_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message: 'Não foi possível salvar o comentário agora. Tente novamente mais tarde.',
+  },
+  COMENTARIO_OPERATION_PENDING: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message: 'A operação do comentário ainda não foi concluída. Tente novamente mais tarde.',
+  },
+  COMENTARIO_IDEMPOTENCY_CONFLICT: {
+    status: HttpStatus.CONFLICT,
+    message: 'A chave de repetição já foi usada para outro comentário.',
+  },
   MEDIA_INVALID: {
     status: HttpStatus.UNPROCESSABLE_ENTITY,
     message: 'As mídias informadas não foram validadas.',
