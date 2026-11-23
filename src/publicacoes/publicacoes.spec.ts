@@ -59,10 +59,12 @@ function query(value: unknown) {
     select: vi.fn(),
     sort: vi.fn(),
     limit: vi.fn(),
+    lean: vi.fn(),
   };
   result.select.mockReturnValue(result);
   result.sort.mockReturnValue(result);
   result.limit.mockReturnValue(result);
+  result.lean.mockReturnValue(result);
   return result;
 }
 
@@ -73,6 +75,7 @@ function setup(verifier: MediaVerifier = new UnavailableMediaVerifier()) {
     username: 'pessoa',
     biografia: 'Bio pública',
     avatar_url: '/avatar.png',
+    visibilidade_perfil: 'publico' as 'publico' | 'privado',
     email: 'private@example.test',
   };
   const saved = publication();
@@ -90,18 +93,28 @@ function setup(verifier: MediaVerifier = new UnavailableMediaVerifier()) {
   const cursor = new PublicacoesCursor({
     getOrThrow: () => 'unit-test-secret-for-publication-cursors',
   } as unknown as ConfigService);
+  const cache = {
+    pageAddress: vi.fn().mockResolvedValue(null),
+    postAddress: vi.fn().mockResolvedValue(null),
+    readPage: vi.fn().mockResolvedValue(null),
+    readPost: vi.fn().mockResolvedValue(null),
+    isCurrent: vi.fn().mockResolvedValue(true),
+    writePage: vi.fn().mockResolvedValue(undefined),
+    writePost: vi.fn().mockResolvedValue(undefined),
+    countHit: vi.fn(),
+    countStaleMiss: vi.fn(),
+    countMongoAfterMiss: vi.fn(),
+    coalesce: vi.fn().mockImplementation((_key, load) => load()),
+    invalidate: vi.fn().mockResolvedValue(undefined),
+  };
   const service = new PublicacoesService(
     publications as unknown as Model<Publicacao>,
     users as unknown as Model<Usuario>,
     verifier,
     cursor,
-    {
-      pageAddress: vi.fn().mockResolvedValue(null),
-      postAddress: vi.fn().mockResolvedValue(null),
-      invalidate: vi.fn().mockResolvedValue(undefined),
-    } as unknown as PublicacoesCacheService,
+    cache as unknown as PublicacoesCacheService,
   );
-  return { service, publications, users, saved, author, cursor };
+  return { service, publications, users, saved, author, cursor, cache };
 }
 
 function body() {
@@ -707,5 +720,79 @@ describe('PublicacoesService list', () => {
       service.list({ limite: 20, cursor: ownerCursor }, authorId.toString()),
     ).rejects.toMatchObject({ status: 400 });
     expect(publications.find).not.toHaveBeenCalled();
+  });
+});
+
+describe('publicações: privacidade da biografia', () => {
+  it.each(['publico', undefined] as const)(
+    'keeps the biography for a %s or legacy public author',
+    async (visibility) => {
+      const { service, publications, author } = setup();
+      author.visibilidade_perfil = visibility as 'publico' | 'privado';
+      publications.find.mockReturnValue(query([publication()]));
+      const page = await service.list({ limite: 20 });
+      const detail = await service.findById(page.items[0].id);
+      expect(page.items[0].autor.biografia).toBe('Bio pública');
+      expect(detail.autor.biografia).toBe('Bio pública');
+    },
+  );
+
+  it('hides private biography in lists and details for third parties, but keeps it for the author', async () => {
+    const { service, publications, author } = setup();
+    author.visibilidade_perfil = 'privado';
+    const post = publication();
+    publications.find.mockReturnValue(query([post]));
+    for (const viewer of [undefined, new Types.ObjectId().toString()]) {
+      const page = await service.list({ limite: 20 }, viewer);
+      const detail = await service.findById(post._id.toString(), viewer);
+      expect(page.items[0].autor.biografia).toBeNull();
+      expect(detail.autor.biografia).toBeNull();
+      expect(detail.autor).toEqual({
+        id: authorId.toString(),
+        nome: 'Pessoa',
+        username: 'pessoa',
+        biografia: null,
+        avatarUrl: '/avatar.png',
+      });
+      expect(detail.autor).not.toHaveProperty('email');
+    }
+    expect((await service.list({ limite: 20 }, authorId.toString())).items[0].autor.biografia).toBe('Bio pública');
+    expect((await service.findById(post._id.toString(), authorId.toString())).autor.biografia).toBe('Bio pública');
+  });
+
+  it('invalidates a cached detail when an author changes from public to private', async () => {
+    const { service, publications, author, saved, cache } = setup();
+    saved.atualizada_em = new Date('2026-11-22T10:00:00.000Z');
+    const oldResponse = await service.findById(saved._id.toString());
+    author.visibilidade_perfil = 'privado';
+    publications.find.mockReturnValue(query([saved]));
+    cache.postAddress.mockResolvedValue({ key: 'post-cache' });
+    cache.readPost.mockResolvedValue(oldResponse);
+
+    const result = await service.findById(saved._id.toString());
+    expect(result.autor.biografia).toBeNull();
+    expect(cache.countStaleMiss).toHaveBeenCalledOnce();
+    expect(cache.countHit).not.toHaveBeenCalled();
+    expect(cache.writePost.mock.calls[0][1].autor.biografia).toBeNull();
+
+    cache.readPost.mockResolvedValue(cache.writePost.mock.calls[0][1]);
+    const owner = await service.findById(saved._id.toString(), authorId.toString());
+    expect(owner.autor.biografia).toBe('Bio pública');
+    expect(cache.countHit).toHaveBeenCalledOnce();
+  });
+
+  it('invalidates a cached list when an author changes from public to private', async () => {
+    const { service, publications, author, saved, cache } = setup();
+    saved.atualizada_em = new Date('2026-11-22T10:00:00.000Z');
+    publications.find.mockReturnValue(query([saved]));
+    const oldPage = await service.list({ limite: 20 });
+    author.visibilidade_perfil = 'privado';
+    cache.pageAddress.mockResolvedValue({ key: 'page-cache' });
+    cache.readPage.mockResolvedValue(oldPage);
+
+    const page = await service.list({ limite: 20 });
+    expect(page.items[0].autor.biografia).toBeNull();
+    expect(cache.countStaleMiss).toHaveBeenCalledOnce();
+    expect(cache.writePage.mock.calls[0][1].items[0].autor.biografia).toBeNull();
   });
 });
