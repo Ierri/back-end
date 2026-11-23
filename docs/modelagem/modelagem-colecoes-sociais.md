@@ -2,7 +2,7 @@
 
 **Tipo de artefato:** especificação conceitual, lógica e física  
 **Banco principal:** MongoDB  
-**Status:** proposta de modelagem; nenhuma coleção deste documento está declarada como implementada  
+**Status:** implementação parcial; distinguir schemas, APIs existentes e propostas
 **Complemento:** [`modelagem-usuarios.md`](./modelagem-usuarios.md)  
 **DER completo:** [`der-completo.dbml`](./der-completo.dbml)
 
@@ -12,6 +12,7 @@ Este documento detalha as coleções:
 
 - `tecnologias`;
 - `publicacoes`, incluindo o subdocumento `midias`;
+- `uploads_midias`, para controle temporário de envio e reserva;
 - `comentarios`;
 - `votos`;
 - `publicacoes_salvas`;
@@ -20,7 +21,7 @@ Este documento detalha as coleções:
 - `denuncias`;
 - `eventos_outbox`.
 
-Todas são propostas para evolução do produto. A única coleção confirmada no back-end atual é `usuarios`, documentada separadamente.
+`tecnologias`, `publicacoes`, `comentarios`, `votos`, `publicacoes_salvas` e `seguidores` possuem schemas. As APIs de publicações e comentários estão implementadas; tecnologias são carregadas apenas pelo seed local. Votos, salvos e seguidores ainda não têm serviços ou endpoints. Notificações, denúncias e outbox permanecem propostas.
 
 ## 2. Princípios de modelagem
 
@@ -80,7 +81,7 @@ Catálogo controlado de stacks selecionáveis no perfil.
 
 Índice obrigatório: `{ slug: 1 }`, único.
 
-Tecnologias referenciadas por usuários não devem ser apagadas fisicamente. Devem ser marcadas como inativas para preservar perfis e pesquisas históricas.
+Tecnologias referenciadas por usuários não devem ser apagadas fisicamente. Devem ser marcadas como inativas para preservar perfis e pesquisas históricas. O índice `{ ativo: 1, nome: 1, _id: 1 }` está definido para futuras consultas do catálogo.
 
 ## 5. `publicacoes`
 
@@ -150,11 +151,13 @@ Invariantes de mídia:
 - vídeo exige `duracao_segundos`; dimensões são recomendadas;
 - `chave_storage` identifica o objeto físico e não deve ser exposta como credencial;
 - até 10 arquivos e 200 MB agregados;
-- imagens: JPEG, PNG ou WebP, até 10 MB cada;
-- vídeos: MP4/H.264 ou WebM, até 100 MB e 120 segundos cada;
+- imagens: JPEG, PNG ou WebP, até 25.000.000 bytes cada;
+- vídeos: MP4/H.264 ou WebM, até 25.000.000 bytes e 120 segundos cada;
 - MIME type, assinatura binária e tamanho precisam concordar.
 
 Mídias são incorporadas porque têm cardinalidade limitada, pertencem exclusivamente à publicação e são lidas junto dela. O bloco `publicacao_midias` no DER é apenas uma representação visual desse subdocumento.
+
+`uploads_midias` é uma coleção física separada que guarda referência, proprietário, chave S3, metadados inspecionados, estado, reserva, expiração e vínculo com a publicação. Seus índices atendem à limpeza por estado/expiração e à busca pelo vínculo. O arquivo permanece no armazenamento S3; o documento temporário não substitui `publicacoes.midias`.
 
 ### Ciclo de vida
 
@@ -175,8 +178,9 @@ processando ──sucesso──> publicada ──autor──> arquivada
 
 ```javascript
 { slug: 1 }                                                        // unique
-{ autor_id: 1, publicada_em: -1 }
-{ status: 1, visibilidade: 1, publicada_em: -1 }
+{ autor_id: 1, status: 1, publicada_em: -1, _id: -1 }
+{ autor_id: 1, status: 1, visibilidade: 1, publicada_em: -1, _id: -1 }
+{ status: 1, visibilidade: 1, publicada_em: -1, _id: -1 }
 { status: 1, visibilidade: 1, "contadores.score": -1, publicada_em: -1 }
 ```
 
@@ -194,6 +198,7 @@ Pesquisa por conteúdo deve escolher entre índice textual nativo e Atlas Search
   profundidade: 0 | 1 | 2,
   conteudo: String,
   status: "publicado" | "excluido" | "oculto",
+  criacao_estado: "pendente" | "confirmado" | "falhou",
   editado_em: Date | null,
   criado_em: Date,
   atualizado_em: Date
@@ -215,14 +220,16 @@ Além disso:
 3. Excluir comentário com respostas muda o status para `excluido` e preserva o nó.
 4. Moderação usa `oculto`, diferenciando-a da ação do autor.
 5. `editado_em` muda apenas em edição do conteúdo; `atualizado_em` cobre qualquer alteração.
+6. `conteudo` tem no máximo 2.000 caracteres; a criação idempotente só é confirmada após atualizar o contador.
+7. `publicacoes.comentarios_revisao` e `comentarios_operacoes_pendentes` sustentam a reconciliação sem transação entre documentos.
 
 Índices:
 
 ```javascript
-{ publicacao_id: 1, comentario_pai_id: 1, criado_em: 1 }
-{ comentario_raiz_id: 1, criado_em: 1 }
-{ autor_id: 1, criado_em: -1 }
+{ publicacao_id: 1, comentario_pai_id: 1, criado_em: 1, _id: 1 }
 ```
+
+Índices por raiz ou autor aguardam consultas que os utilizem.
 
 ## 7. `votos`
 
@@ -238,6 +245,7 @@ Além disso:
 ```
 
 Índice único obrigatório: `{ publicacao_id: 1, usuario_id: 1 }`.
+O schema também define `{ usuario_id: 1, atualizado_em: -1, _id: -1 }` para eventual listagem paginada por usuário.
 
 Regras:
 
@@ -272,7 +280,7 @@ Regras:
 
 ```javascript
 { usuario_id: 1, publicacao_id: 1 }  // unique
-{ usuario_id: 1, criado_em: -1 }
+{ usuario_id: 1, criado_em: -1, _id: -1 }
 ```
 
 O índice único torna o salvamento idempotente. A existência do documento é a fonte de verdade; `publicacoes.contadores.salvamentos` é apenas projeção. Salvar não concede acesso permanente a uma publicação que depois se torne inacessível.
@@ -305,8 +313,8 @@ Invariantes:
 
 ```javascript
 { seguidor_id: 1, seguido_id: 1 }                  // unique
-{ seguido_id: 1, status: 1, solicitado_em: -1 }   // solicitações e seguidores
-{ seguidor_id: 1, status: 1, atualizado_em: -1 }  // seguindo
+{ seguido_id: 1, status: 1, solicitado_em: -1, _id: -1 }   // solicitações e seguidores
+{ seguidor_id: 1, status: 1, atualizado_em: -1, _id: -1 }  // seguindo
 ```
 
 ## 10. `notificacoes`

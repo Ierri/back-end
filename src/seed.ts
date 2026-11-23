@@ -2,6 +2,8 @@ import 'reflect-metadata';
 import 'dotenv/config';
 import mongoose from 'mongoose';
 import { Usuario, UsuarioSchema } from './usuarios/schemas/usuario.schema.js';
+import { Tecnologia, TecnologiaSchema } from './usuarios/schemas/tecnologia.schema.js';
+import { technologySeedOperations } from './tecnologias-iniciais.js';
 import {
   buildSeedUser,
   readSeedConfig,
@@ -17,16 +19,24 @@ async function seed() {
       serverSelectionTimeoutMS: 10000,
     });
     const usuarios = mongoose.model(Usuario.name, UsuarioSchema);
+    const tecnologias = mongoose.model(Tecnologia.name, TecnologiaSchema);
     await usuarios.init();
+    await tecnologias.init();
 
     const usuario = new usuarios(await buildSeedUser(config));
     await usuario.validate();
+    const now = new Date();
+    const insertedUser = usuario.toObject();
+    insertedUser.criado_em = now;
+    insertedUser.atualizado_em = now;
 
     const result = await usuarios.updateOne(
       { email: usuario.email },
-      { $setOnInsert: usuario.toObject() },
-      { upsert: true, runValidators: true },
+      { $setOnInsert: insertedUser },
+      { upsert: true, runValidators: true, timestamps: false },
     );
+
+    await tecnologias.bulkWrite(technologySeedOperations(now));
 
     console.log(
       result.upsertedCount

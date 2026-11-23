@@ -2,7 +2,7 @@ Project ierri_modelagem_usuarios {
   database_type: 'MongoDB'
   Note: '''
     Modelo da coleção usuarios e sua relação com o catálogo de tecnologias.
-    Os campos marcados como propostos ainda não fazem parte da baseline implementada.
+    Campos sociais estão no schema; regras de autenticação, privacidade e atualização continuam parciais.
     DBML é usado como notação visual; arrays e subdocumentos representam estruturas MongoDB.
   '''
 }
@@ -24,7 +24,7 @@ Enum status_usuario {
   excluido
 }
 
-Table usuarios [headercolor: #3B82F6, note: 'Coleção existente; campos de evolução estão identificados nas notas.'] {
+Table usuarios [headercolor: #3B82F6, note: 'Schema implementado; campos sociais não implicam fluxos de produto prontos.'] {
   _id ObjectId [pk, not null, note: 'Identificador imutável.']
 
   nome string [not null, note: 'Baseline existente.']
@@ -35,33 +35,31 @@ Table usuarios [headercolor: #3B82F6, note: 'Coleção existente; campos de evol
   biografia string [note: 'Baseline; opcional.']
   avatar_url string [note: 'Baseline; opcional. Guarda referência, não o arquivo.']
 
-  stack_ids ObjectId[] [note: 'Proposto; referências únicas e limitadas a tecnologias.']
-  visibilidade_perfil visibilidade_perfil [not null, default: 'publico', note: 'Proposto.']
-  papeis papel_usuario[] [not null, default: `['usuario']`, note: 'Proposto; valores únicos.']
-  status status_usuario [not null, default: 'ativo', note: 'Proposto.']
+  stack_ids ObjectId[] [note: 'Até 20 referências distintas; existência e atividade exigem serviço de perfil.']
+  visibilidade_perfil visibilidade_perfil [not null, default: 'publico', note: 'Ainda não controla leitura do perfil.']
+  papeis papel_usuario[] [not null, default: `['usuario']`, note: 'Valores únicos; ainda sem gestão administrativa.']
+  status status_usuario [not null, default: 'ativo', note: 'Ainda não bloqueia login.']
 
-  "contadores.publicacoes" int [not null, default: 0, note: 'Projeção proposta; valor não negativo.']
-  "contadores.seguidores" int [not null, default: 0, note: 'Projeção proposta; valor não negativo.']
-  "contadores.seguindo" int [not null, default: 0, note: 'Projeção proposta; valor não negativo.']
-  "contadores.score" int [not null, default: 0, note: 'Projeção proposta; pode ser negativo.']
+  "contadores.publicacoes" int [not null, default: 0, note: 'Projeção modelada; serviço ainda não mantém este valor.']
+  "contadores.seguidores" int [not null, default: 0, note: 'Projeção modelada; serviço ainda não mantém este valor.']
+  "contadores.seguindo" int [not null, default: 0, note: 'Projeção modelada; serviço ainda não mantém este valor.']
+  "contadores.score" int [not null, default: 0, note: 'Projeção modelada; pode ser negativo.']
 
-  email_verificado_em datetime [note: 'Proposto; nulo enquanto não houver verificação.']
-  termos_aceitos_em datetime [note: 'Proposto; deve acompanhar a versão aceita.']
-  versao_termos_aceita string [note: 'Proposto.']
+  email_verificado_em datetime [note: 'Nulo enquanto não houver verificação.']
+  termos_aceitos_em datetime [note: 'Deve acompanhar a versão aceita.']
+  versao_termos_aceita string
 
   criado_em datetime [not null, note: 'Baseline existente; imutável após criação.']
-  atualizado_em datetime [not null, note: 'Proposto.']
-  excluido_em datetime [note: 'Proposto; preenchido somente quando status for excluido.']
+  atualizado_em datetime [not null]
+  excluido_em datetime [note: 'Preenchido somente quando status for excluido.']
 
   indexes {
     email [unique, name: 'uq_usuarios_email']
     username [unique, name: 'uq_usuarios_username']
-    (status, criado_em [desc]) [name: 'ix_usuarios_status_criado_em']
-    (papeis, status) [name: 'ix_usuarios_papeis_status']
   }
 }
 
-Table tecnologias [headercolor: #10B981, note: 'Coleção proposta; catálogo compartilhado de stacks.'] {
+Table tecnologias [headercolor: #10B981, note: 'Schema implementado; catálogo compartilhado de stacks.'] {
   _id ObjectId [pk, not null]
   nome string [not null]
   slug string [not null, unique]
@@ -73,6 +71,7 @@ Table tecnologias [headercolor: #10B981, note: 'Coleção proposta; catálogo co
 
   indexes {
     slug [unique, name: 'uq_tecnologias_slug']
+    (ativo, nome, _id) [name: 'ix_tecnologias_ativas_nome']
   }
 }
 
