@@ -106,6 +106,31 @@ describe.runIf(config)('votos com MongoDB, Redis e MinIO locais', () => {
     expect(await counters()).toEqual({ upvotes, downvotes, score: upvotes - downvotes });
   };
 
+  const failReservationRelease = (token: string) => {
+    const model = (votosService as unknown as { publicacoes: Model<unknown> }).publicacoes;
+    const originalUpdate = model.updateOne.bind(model);
+    let intercepted = false;
+    const spy = vi.spyOn(model, 'updateOne').mockImplementation(
+      ((filter: unknown, update: unknown, options: unknown) => {
+        const query = originalUpdate(
+          filter as Parameters<typeof model.updateOne>[0],
+          update as Parameters<typeof model.updateOne>[1],
+          options as Parameters<typeof model.updateOne>[2],
+        );
+        const pulled = (update as { $pull?: { votos_operacoes_pendentes?: { token?: string } } })
+          .$pull?.votos_operacoes_pendentes?.token;
+        if (pulled === token) {
+          query.exec = (async () => {
+            intercepted = true;
+            throw new Error('Controlled later release failure');
+          }) as typeof query.exec;
+        }
+        return query;
+      }) as typeof model.updateOne,
+    );
+    return { spy, wasIntercepted: () => intercepted };
+  };
+
   const startApp = async () => {
     const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = module.createNestApplication();
@@ -546,6 +571,82 @@ describe.runIf(config)('votos com MongoDB, Redis e MinIO locais', () => {
     await expectState(0, 1);
   }, 30_000);
 
+  it('reschedules with the persisted revision after a partial release and later recovers the vote', async () => {
+    votosService.onModuleDestroy();
+    try {
+      await vi.waitFor(() => {
+        expect((votosService as unknown as { recovering: boolean }).recovering).toBe(false);
+      }, { timeout: 10_000 });
+      const publicationId = new Types.ObjectId(postId);
+      const firstToken = randomBytes(12).toString('hex');
+      const laterToken = randomBytes(12).toString('hex');
+      const validToken = randomBytes(12).toString('hex');
+      const firstUserId = new Types.ObjectId();
+      const laterUserId = new Types.ObjectId();
+      const validUserId = new Types.ObjectId();
+      const validUntil = new Date(Date.now() + 300_000);
+      await insertVote(readerId, 1);
+      await connection.db!.collection('votos').insertOne({
+        publicacao_id: publicationId, usuario_id: validUserId, valor: null, revisao: 0,
+        operacao: { token: validToken, expira_em: validUntil, estado: 'reservada' },
+        criado_em: new Date(), atualizado_em: new Date(),
+      });
+      await connection.db!.collection('publicacoes').updateOne(
+        { _id: publicationId },
+        { $set: {
+          votos_revisao: 0,
+          votos_operacoes_pendentes: [
+            { usuario_id: firstUserId, token: firstToken, expira_em: new Date(0) },
+            { usuario_id: laterUserId, token: laterToken, expira_em: new Date(0) },
+            { usuario_id: validUserId, token: validToken, expira_em: validUntil },
+          ],
+          votos_projecao_pendente: true,
+          votos_proxima_tentativa_em: new Date(0),
+        } },
+      );
+      const { spy, wasIntercepted } = failReservationRelease(laterToken);
+      try {
+        await votosService.recoverPendingBatch();
+      } finally {
+        spy.mockRestore();
+      }
+      expect(wasIntercepted()).toBe(true);
+      const pending = (await postDocument())!;
+      expect(pending.votos_revisao).toBe(1);
+      expect(pending.votos_operacoes_pendentes.map((item: { token: string }) => item.token))
+        .toEqual([laterToken, validToken]);
+      expect(pending.votos_proxima_tentativa_em.getTime()).toBeGreaterThan(Date.now());
+      expect(pending.votos_projecao_pendente).toBe(true);
+      const validVote = await connection.db!.collection('votos').findOne({
+        publicacao_id: publicationId, usuario_id: validUserId,
+      });
+      expect(validVote!.operacao).toMatchObject({ token: validToken, expira_em: validUntil });
+      expect((await votes()).map((vote) => vote.valor)).toEqual([1]);
+      await connection.db!.collection('votos').updateOne(
+        { publicacao_id: publicationId, usuario_id: validUserId },
+        { $set: { 'operacao.expira_em': new Date(0) } },
+      );
+      await connection.db!.collection('publicacoes').updateOne(
+        { _id: publicationId },
+        { $set: {
+          'votos_operacoes_pendentes.$[pending].expira_em': new Date(0),
+          votos_proxima_tentativa_em: new Date(0),
+        } },
+        { arrayFilters: [{ 'pending.token': validToken }] },
+      );
+      await votosService.recoverPendingBatch();
+      const recovered = (await postDocument())!;
+      expect(recovered.votos_operacoes_pendentes).toHaveLength(0);
+      expect(recovered.votos_projecao_pendente).toBe(false);
+      expect((await connection.db!.collection('votos').findOne({
+        publicacao_id: publicationId, usuario_id: validUserId,
+      }))!.operacao).toBeNull();
+      await expectState(1, 0);
+    } finally {
+      votosService.onModuleInit();
+    }
+  }, 30_000);
+
   it('progresses beyond the first 100 pending publications', async () => {
     votosService.onModuleDestroy();
     try {
@@ -565,15 +666,48 @@ describe.runIf(config)('votos com MongoDB, Redis e MinIO locais', () => {
       await connection.db!.collection('publicacoes').insertMany(documents);
       postId = documents.at(-1)!._id.toString();
       await insertVote(readerId, 1);
-      await votosService.recoverPendingBatch();
+      const firstToken = randomBytes(12).toString('hex');
+      const laterToken = randomBytes(12).toString('hex');
+      await connection.db!.collection('publicacoes').updateOne(
+        { _id: documents[0]._id },
+        { $set: {
+          votos_revisao: 0,
+          votos_operacoes_pendentes: [
+            { usuario_id: new Types.ObjectId(), token: firstToken, expira_em: new Date(0) },
+            { usuario_id: new Types.ObjectId(), token: laterToken, expira_em: new Date(0) },
+          ],
+          votos_proxima_tentativa_em: new Date(0),
+        } },
+      );
+      const { spy, wasIntercepted } = failReservationRelease(laterToken);
+      try {
+        await votosService.recoverPendingBatch();
+      } finally {
+        spy.mockRestore();
+      }
+      expect(wasIntercepted()).toBe(true);
+      const failed = await connection.db!.collection('publicacoes').findOne({ _id: documents[0]._id });
+      expect(failed!.votos_revisao).toBe(1);
+      expect(failed!.votos_operacoes_pendentes.map((item: { token: string }) => item.token))
+        .toEqual([laterToken]);
+      expect(failed!.votos_proxima_tentativa_em.getTime()).toBeGreaterThan(Date.now());
       const ids = documents.map((item) => item._id);
       const remaining = () => connection.db!.collection('publicacoes').countDocuments({
         _id: { $in: ids }, votos_projecao_pendente: true,
       });
       expect(await remaining()).toBeGreaterThan(0);
-      for (let attempt = 0; attempt < 4 && await remaining(); attempt++)
-        await votosService.recoverPendingBatch();
+      await votosService.recoverPendingBatch();
+      expect(await remaining()).toBe(1);
+      await expectState(1, 0);
+      await connection.db!.collection('publicacoes').updateOne(
+        { _id: documents[0]._id },
+        { $set: { votos_proxima_tentativa_em: new Date(0) } },
+      );
+      await votosService.recoverPendingBatch();
       expect(await remaining()).toBe(0);
+      const recovered = await connection.db!.collection('publicacoes').findOne({ _id: documents[0]._id });
+      expect(recovered!.votos_operacoes_pendentes).toHaveLength(0);
+      expect(recovered!.contadores).toMatchObject({ upvotes: 0, downvotes: 0, score: 0 });
       await expectState(1, 0);
     } finally {
       votosService.onModuleInit();

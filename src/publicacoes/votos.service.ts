@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import type { Model } from 'mongoose';
@@ -22,9 +22,12 @@ const RECOVERY_BATCH = 100;
 
 @Injectable()
 export class VotosService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(VotosService.name);
   private recoveryTimer?: ReturnType<typeof setInterval>;
   private recovering = false;
   private cycles = 0;
+  private lastRecoveryWarningAt: number | null = null;
+  private suppressedRecoveryWarnings = 0;
 
   constructor(
     @InjectModel(Voto.name) private readonly votos: Model<Voto>,
@@ -34,9 +37,9 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
-    void this.recoverPendingBatch().catch(() => undefined);
+    void this.recoverPendingBatch().catch(() => this.warnRecovery('Falha ao executar a recuperação de votos.'));
     this.recoveryTimer = setInterval(() => {
-      void this.recoverPendingBatch().catch(() => undefined);
+      void this.recoverPendingBatch().catch(() => this.warnRecovery('Falha ao executar a recuperação de votos.'));
     }, 30_000);
     this.recoveryTimer.unref();
   }
@@ -348,6 +351,10 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
     if (this.recovering) return 0;
     this.recovering = true;
     try {
+      const startedAt = Date.now();
+      let processed = 0;
+      let failed = 0;
+      let rescheduleFailed = 0;
       const now = new Date();
       const publications = await this.publicacoes.find({
         votos_projecao_pendente: true,
@@ -359,22 +366,19 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
         .limit(RECOVERY_BATCH).select('_id votos_revisao votos_operacoes_pendentes').exec();
       for (const publication of publications) {
         const id = publication._id.toString();
-        let expectedRevision = publication.votos_revisao ?? 0;
         try {
-          expectedRevision += await this.recoverExpired(publication);
+          await this.recoverExpired(publication);
           await this.reconcileCounter(id);
+          processed++;
         } catch {
-          await this.publicacoes.updateOne(
-            {
-              _id: publication._id,
-              votos_projecao_pendente: true,
-              votos_revisao: expectedRevision,
-            },
-            { $set: { votos_proxima_tentativa_em: new Date(Date.now() + 60_000) } },
-            { timestamps: false },
-          ).exec().catch(() => undefined);
+          failed++;
+          if (!(await this.reschedulePending(publication._id).catch(() => false)))
+            rescheduleFailed++;
         }
       }
+      if (failed) this.warnRecovery(
+        `Lote de votos: examinadas=${publications.length}, concluidas=${processed}, falhas=${failed}, reagendamento_falhou=${rescheduleFailed}, duracao_ms=${Date.now() - startedAt}.`,
+      );
       if (++this.cycles % 10 === 0) await this.auditLegacyBatch();
       return publications.length;
     } finally {
@@ -382,18 +386,58 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private warnRecovery(message: string) {
+    this.suppressedRecoveryWarnings++;
+    const now = Date.now();
+    if (this.lastRecoveryWarningAt !== null && now - this.lastRecoveryWarningAt < 300_000)
+      return;
+    try {
+      this.logger.warn(`${message} eventos_com_falha=${this.suppressedRecoveryWarnings}`);
+    } catch {}
+    this.lastRecoveryWarningAt = now;
+    this.suppressedRecoveryWarnings = 0;
+  }
+
+  private async reschedulePending(id: Types.ObjectId) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const current = await this.publicacoes.findById(id)
+        .select('votos_revisao votos_projecao_pendente votos_proxima_tentativa_em')
+        .lean().exec();
+      if (!current || !current.votos_projecao_pendente) return true;
+      if (current.votos_proxima_tentativa_em && current.votos_proxima_tentativa_em > new Date())
+        return true;
+      const rescheduled = await this.publicacoes.updateOne(
+        {
+          _id: id,
+          votos_projecao_pendente: true,
+          votos_revisao: current.votos_revisao ?? null,
+          votos_proxima_tentativa_em: current.votos_proxima_tentativa_em ?? null,
+        },
+        { $set: { votos_proxima_tentativa_em: new Date(Date.now() + 60_000) } },
+        { timestamps: false },
+      ).exec();
+      if (rescheduled.modifiedCount === 1) return true;
+    }
+    return false;
+  }
+
   async auditLegacyBatch(): Promise<number> {
     const publications = await this.publicacoes.find({})
       .sort({ votos_auditoria_em: 1, _id: 1 }).limit(25)
       .select('_id').lean().exec();
+    let reconcileFailed = 0;
+    let auditUpdateFailed = 0;
     for (const publication of publications) {
-      await this.reconcileCounter(publication._id.toString()).catch(() => undefined);
+      await this.reconcileCounter(publication._id.toString()).catch(() => { reconcileFailed++; });
       await this.publicacoes.updateOne(
         { _id: publication._id },
         { $set: { votos_auditoria_em: new Date() } },
         { timestamps: false },
-      ).exec().catch(() => undefined);
+      ).exec().catch(() => { auditUpdateFailed++; });
     }
+    if (reconcileFailed || auditUpdateFailed) this.warnRecovery(
+      `Auditoria de votos: examinadas=${publications.length}, reconciliacao_falhou=${reconcileFailed}, atualizacao_falhou=${auditUpdateFailed}.`,
+    );
     return publications.length;
   }
 }
