@@ -9,6 +9,8 @@ import { createClient } from 'redis';
 import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
 import { configureHttp } from '../src/common/http/configure-http.js';
+import { PerfilUpdateService } from '../src/usuarios/perfil-update.service.js';
+import { UsuariosStacksService } from '../src/usuarios/stacks.service.js';
 
 const baseMongoUri = process.env.MONGODB_URI;
 const baseRedisUrl = process.env.REDIS_URL;
@@ -334,11 +336,71 @@ describe.runIf(config)('perfis e stacks com MongoDB e Redis locais', () => {
       { _id: id },
       { $unset: { stack_ids: '', visibilidade_perfil: '', status: '', contadores: '', atualizado_em: '' } },
     );
-    const me = await request(app.getHttpServer()).get('/usuarios/me').set(auth(token)).expect(200);
-    expect(me.body.data).toMatchObject({ email: 'legado.perfis@example.test', stackIds: [], stacks: [], visibilidadePerfil: 'publico' });
+    const me = await request(app.getHttpServer()).get('/usuarios/me').set(auth(token)).expect(401);
+    expect(me.body.error.code).toBe('INVALID_TOKEN');
     const publicProfile = await request(app.getHttpServer()).get(`/usuarios/${username}`).expect(200);
     expect(publicProfile.body.data.stacks).toEqual([]);
     expect(publicProfile.body.data).not.toHaveProperty('email');
+  });
+
+  it('blocks a profile write when account status changes after the guard check', async () => {
+    const registered = await request(app.getHttpServer()).post('/auth/register')
+      .send({ name: 'Race Profile', email: 'race.profile@example.test', password: 'SenhaTeste123!' }).expect(201);
+    const userId = new Types.ObjectId(registered.body.data.user.id as string);
+    const service = app.get(PerfilUpdateService);
+    const original = service.update.bind(service);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const spy = vi.spyOn(service, 'update').mockImplementation(async (id, dto) => {
+      await pending;
+      return original(id, dto);
+    });
+    try {
+      const response = request(app.getHttpServer()).patch('/usuarios/me')
+        .set(auth(registered.body.data.access_token as string))
+        .send({ nome: 'Nome indevido' }).then((result) => result);
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledOnce(), { timeout: 5000 });
+      await connection.db!.collection('usuarios').updateOne(
+        { _id: userId }, { $set: { status: 'bloqueado' } },
+      );
+      release();
+      expect((await response).status).toBe(404);
+      const stored = await connection.db!.collection('usuarios').findOne({ _id: userId });
+      expect(stored?.nome).toBe('Race Profile');
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  });
+
+  it('blocks a stack replacement when account status changes after the guard check', async () => {
+    const registered = await request(app.getHttpServer()).post('/auth/register')
+      .send({ name: 'Race Stack', email: 'race.stack@example.test', password: 'SenhaTeste123!' }).expect(201);
+    const userId = new Types.ObjectId(registered.body.data.user.id as string);
+    const service = app.get(UsuariosStacksService);
+    const original = service.replace.bind(service);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const spy = vi.spyOn(service, 'replace').mockImplementation(async (id, stackIds) => {
+      await pending;
+      return original(id, stackIds);
+    });
+    try {
+      const response = request(app.getHttpServer()).put('/usuarios/me/stacks')
+        .set(auth(registered.body.data.access_token as string))
+        .send({ stackIds: [technologies[0]._id.toString()] }).then((result) => result);
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledOnce(), { timeout: 5000 });
+      await connection.db!.collection('usuarios').updateOne(
+        { _id: userId }, { $set: { status: 'bloqueado' } },
+      );
+      release();
+      expect((await response).status).toBe(401);
+      const stored = await connection.db!.collection('usuarios').findOne({ _id: userId });
+      expect(stored?.stack_ids).toEqual([]);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
   });
 
   it('arbitrates concurrent username claims and never combines competing stack replacements', async () => {

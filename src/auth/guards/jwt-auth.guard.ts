@@ -5,6 +5,7 @@ import type { Request } from 'express';
 import { SESSION_COOKIE } from '../session-cookie.js';
 import { ApiException } from '../../common/http/api.exception.js';
 import { SessoesService } from '../sessoes.service.js';
+import { UsuariosService } from '../../usuarios/usuarios.service.js';
 
 export type AuthenticatedRequest = Request & {
   authUserId: string;
@@ -16,6 +17,7 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     @Inject(JwtService) private readonly jwt: JwtService,
     @Inject(SessoesService) private readonly sessoes: SessoesService,
+    @Inject(UsuariosService) private readonly usuarios: UsuariosService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -28,6 +30,13 @@ export class JwtAuthGuard implements CanActivate {
     if (!token) throw new ApiException('TOKEN_REQUIRED');
     const payload = await this.verifyToken(token, false);
     await this.sessoes.assertActive(payload.sid, payload.sub);
+    let active;
+    try {
+      active = await this.usuarios.hasActiveStatus(payload.sub);
+    } catch {
+      throw new ApiException('AUTH_STATUS_UNAVAILABLE');
+    }
+    if (!active) throw new ApiException('INVALID_TOKEN');
     request.authUserId = payload.sub;
     request.authSessionId = payload.sid;
     return true;

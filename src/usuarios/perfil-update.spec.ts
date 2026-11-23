@@ -56,7 +56,7 @@ describe('atualização do próprio perfil', () => {
     const dto = updatePerfilSchema.parse({ nome: ' Pessoa ', username: 'NOVO_NOME', biografia: null, avatarUrl: null, visibilidadePerfil: 'privado' });
     await expect(service.update('user-id', dto)).resolves.toBe(persisted);
     expect(findOneAndUpdate).toHaveBeenCalledWith(
-      { _id: 'user-id' },
+      { _id: 'user-id', status: 'ativo' },
       { $set: { nome: 'Pessoa', username: 'novo_nome', biografia: null, avatar_url: null, visibilidade_perfil: 'privado' } },
       { new: true, runValidators: true },
     );
@@ -71,6 +71,15 @@ describe('atualização do próprio perfil', () => {
     await expect(service.update('missing-id', { nome: 'Pessoa' })).rejects.toMatchObject({
       response: { code: 'USER_NOT_FOUND' },
     });
+  });
+
+  it('does not update a profile after the account status changes before the atomic write', async () => {
+    const { service, findOneAndUpdate, exec } = setup(null);
+    await expect(service.update('user-id', { nome: 'Novo nome' })).rejects.toMatchObject({
+      response: { code: 'USER_NOT_FOUND' },
+    });
+    expect(findOneAndUpdate.mock.calls[0][0]).toEqual({ _id: 'user-id', status: 'ativo' });
+    expect(exec).toHaveBeenCalledOnce();
   });
 
   it('maps concurrent username collisions to HTTP 409', async () => {

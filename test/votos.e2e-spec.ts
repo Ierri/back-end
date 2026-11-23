@@ -318,8 +318,9 @@ describe.runIf(config)('votos com MongoDB, Redis e MinIO locais', () => {
       await connection.db!.collection('usuarios').updateOne(
         { _id: new Types.ObjectId(readerId) }, { $set: { status } },
       );
-      await put(tokenB, -1).expect(403);
-      await remove(tokenB).expect(403);
+      expect((await put(tokenB, -1).expect(401)).body.error.code).toBe('INVALID_TOKEN');
+      expect((await remove(tokenB).expect(401)).body.error.code).toBe('INVALID_TOKEN');
+      expect((await get(tokenB).expect(401)).body.error.code).toBe('INVALID_TOKEN');
     }
     await connection.db!.collection('usuarios').updateOne(
       { _id: new Types.ObjectId(readerId) }, { $set: { status: 'ativo' } },

@@ -21,7 +21,7 @@ export class PerfilUpdateService {
     try {
       const updated = await this.usuarios
         .findOneAndUpdate(
-          { _id: userId },
+          { _id: userId, status: 'ativo' },
           { $set: changes },
           { new: true, runValidators: true },
         )
