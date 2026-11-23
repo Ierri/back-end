@@ -10,6 +10,8 @@ import request from 'supertest';
 import { configureHttp } from '../src/common/http/configure-http.js';
 import { AppModule } from '../src/app.module.js';
 import { RedisSessionClient } from '../src/auth/redis-session.client.js';
+import { SessoesService } from '../src/auth/sessoes.service.js';
+import { UsuariosService } from '../src/usuarios/usuarios.service.js';
 
 const baseMongoUri = process.env.MONGODB_URI;
 const baseRedisUrl = process.env.REDIS_URL;
@@ -53,6 +55,8 @@ describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
   let app: INestApplication;
   let connection: Connection;
   let sessionClient: RedisSessionClient;
+  let sessoesService: SessoesService;
+  let usersService: UsuariosService;
   const inspector = createClient({ url: baseRedisUrl });
   const body = {
     name: 'Ana Integração',
@@ -80,6 +84,8 @@ describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
     await app.init();
     connection = module.get<Connection>(getConnectionToken());
     sessionClient = module.get(RedisSessionClient);
+    sessoesService = module.get(SessoesService);
+    usersService = module.get(UsuariosService);
   });
 
   afterAll(async () => {
@@ -295,6 +301,94 @@ describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
       .post('/auth/check-email')
       .send({ email: 'repeated@example.com' })
       .expect(404);
+  });
+
+  it.each(['bloqueado', 'excluido'] as const)(
+    'denies new login and existing access after an account becomes %s while preserving logout',
+    async (status) => {
+      const agent = request.agent(app.getHttpServer());
+      const email = `status-${status}@example.com`;
+      const registered = await agent.post('/auth/register')
+        .send({ ...body, email }).expect(201);
+      const token = registered.body.data.access_token as string;
+      const userId = new Types.ObjectId(registered.body.data.user.id as string);
+      expect(await inspector.get(sessionKey(token))).toBe(userId.toString());
+      await connection.db!.collection('usuarios').updateOne(
+        { _id: userId },
+        { $set: {
+          status,
+          excluido_em: status === 'excluido' ? new Date() : null,
+        } },
+      );
+      const createSession = vi.spyOn(sessoesService, 'create');
+      let deniedLogin;
+      try {
+        deniedLogin = await request(app.getHttpServer()).post('/auth/login')
+          .send({ email, password: body.password }).expect(401);
+        expect(createSession).not.toHaveBeenCalled();
+      } finally {
+        createSession.mockRestore();
+      }
+      expect(deniedLogin.body.error.code).toBe('INVALID_CREDENTIALS');
+      expect(deniedLogin.headers['set-cookie']).toBeUndefined();
+      expect(JSON.stringify(deniedLogin.body)).not.toContain('access_token');
+      expect(await inspector.get(sessionKey(token))).toBe(userId.toString());
+      for (const path of ['/auth/me', '/usuarios/me', '/publicacoes']) {
+        const denied = await request(app.getHttpServer()).get(path)
+          .set('Authorization', `Bearer ${token}`).expect(401);
+        expect(denied.body.error.code).toBe('INVALID_TOKEN');
+      }
+      for (const path of ['/publicacoes', '/tecnologias', '/'])
+        await request(app.getHttpServer()).get(path).expect(200);
+      const deniedOptional = await agent.get('/publicacoes').expect(401);
+      expect(deniedOptional.body.error.code).toBe('INVALID_TOKEN');
+      for (const operation of [
+        () => agent.patch('/usuarios/me').send({ nome: 'Novo nome' }),
+        () => agent.put('/usuarios/me/stacks').send({ stackIds: [] }),
+        () => agent.post('/publicacoes').send({ conteudo: 'Texto' }),
+        () => agent.post(`/publicacoes/${new Types.ObjectId().toString()}/comentarios`).send({ conteudo: 'Texto' }),
+        () => agent.put(`/publicacoes/${new Types.ObjectId().toString()}/voto`).send({ valor: 1 }),
+        () => agent.post('/publicacoes/midias'),
+      ]) await operation().expect(401);
+      const logout = await agent.post('/auth/logout').send({}).expect(200);
+      expect(logout.headers['set-cookie'][0]).toContain('Expires=Thu, 01 Jan 1970');
+      expect(await inspector.get(sessionKey(token))).toBeNull();
+    },
+  );
+
+  it('rejects a legacy account without persisted status', async () => {
+    const email = 'legacy-status-auth@example.com';
+    const registered = await request(app.getHttpServer()).post('/auth/register')
+      .send({ ...body, email }).expect(201);
+    const token = registered.body.data.access_token as string;
+    await connection.db!.collection('usuarios').updateOne(
+      { _id: new Types.ObjectId(registered.body.data.user.id as string) },
+      { $unset: { status: '' } },
+    );
+    await request(app.getHttpServer()).get('/auth/me')
+      .set('Authorization', `Bearer ${token}`).expect(401);
+    const login = await request(app.getHttpServer()).post('/auth/login')
+      .send({ email, password: body.password }).expect(401);
+    expect(login.body.error.code).toBe('INVALID_CREDENTIALS');
+    expect(login.headers['set-cookie']).toBeUndefined();
+  });
+
+  it('returns 503 if the MongoDB status check fails and restores access afterward', async () => {
+    const login = await request(app.getHttpServer()).post('/auth/login')
+      .send({ email: body.email, password: body.password }).expect(200);
+    const token = login.body.data.access_token as string;
+    const statusCheck = vi.spyOn(usersService, 'hasActiveStatus')
+      .mockRejectedValueOnce(new Error('MongoDB unavailable'));
+    try {
+      const failed = await request(app.getHttpServer()).get('/auth/me')
+        .set('Authorization', `Bearer ${token}`).expect(503);
+      expect(failed.body.error.code).toBe('AUTH_STATUS_UNAVAILABLE');
+      expect(JSON.stringify(failed.body)).not.toContain('MongoDB unavailable');
+    } finally {
+      statusCheck.mockRestore();
+    }
+    await request(app.getHttpServer()).get('/auth/me')
+      .set('Authorization', `Bearer ${token}`).expect(200);
   });
 
   it('fails closed when the Redis connection is unavailable', async () => {

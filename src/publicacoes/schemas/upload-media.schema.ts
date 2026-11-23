@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Types } from 'mongoose';
+import { Schema as MongooseSchema, Types } from 'mongoose';
 import type { HydratedDocument } from 'mongoose';
 import { MAX_MEDIA_SIZE_BYTES } from '../media-verifier.js';
 
@@ -11,7 +11,7 @@ export class UploadMedia {
   @Prop({ type: String, required: true, unique: true })
   referencia: string;
 
-  @Prop({ type: Types.ObjectId, required: true, immutable: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, required: true, immutable: true })
   usuario_id: Types.ObjectId;
 
   @Prop({ type: String, required: true, unique: true })
@@ -46,7 +46,7 @@ export class UploadMedia {
   })
   estado: 'recebendo' | 'pronta' | 'reservada' | 'vinculada' | 'excluindo';
 
-  @Prop({ type: Types.ObjectId, default: null })
+  @Prop({ type: MongooseSchema.Types.ObjectId, default: null })
   publicacao_id: Types.ObjectId | null;
 
   @Prop({ type: Date, default: null })

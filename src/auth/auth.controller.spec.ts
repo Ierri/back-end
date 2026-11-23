@@ -63,6 +63,9 @@ describe('Auth HTTP (isolated persistence)', () => {
         [...records.values()].find((user) => user._id.toString() === id) ??
         null,
     ),
+    hasActiveStatus: vi.fn((id: string) =>
+      [...records.values()].some((user) => user._id.toString() === id && user.status === 'ativo'),
+    ),
     create: vi.fn(
       (
         data: Pick<
@@ -410,6 +413,86 @@ describe('Auth HTTP (isolated persistence)', () => {
     });
     expect(unknown.body).toEqual(wrong.body);
     expect(sessoes.create).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['bloqueado', 'excluido'] as const)(
+    'denies a new login for a %s account without creating a session',
+    async (status) => {
+      await request(app.getHttpServer()).post('/auth/register').send(body).expect(201);
+      const stored = records.get(body.email)!;
+      stored.status = status;
+      if (status === 'excluido') stored.excluido_em = new Date();
+      const existingSessions = sessions.size;
+      const sign = vi.spyOn(jwt, 'signAsync');
+      let result;
+      try {
+        result = await request(app.getHttpServer())
+          .post('/auth/login')
+          .send({ email: body.email, password: body.password })
+          .expect(401);
+        expect(sign).not.toHaveBeenCalled();
+      } finally {
+        sign.mockRestore();
+      }
+      expect(result.body.error.code).toBe('INVALID_CREDENTIALS');
+      expect(JSON.stringify(result.body)).not.toContain('access_token');
+      expect(result.headers['set-cookie']).toBeUndefined();
+      expect(sessions.size).toBe(existingSessions);
+      expect(sessoes.create).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(['bloqueado', 'excluido'] as const)(
+    'rejects an existing session after the account becomes %s but still permits logout',
+    async (status) => {
+      const agent = request.agent(app.getHttpServer());
+      const registered = await agent.post('/auth/register').send(body).expect(201);
+      const token = registered.body.data.access_token as string;
+      const sid = (await jwt.verifyAsync<{ sid: string }>(token)).sid;
+      const stored = records.get(body.email)!;
+      stored.status = status;
+      if (status === 'excluido') stored.excluido_em = new Date();
+      const rejected = await agent.get('/auth/me').expect(401);
+      expect(rejected.body.error.code).toBe('INVALID_TOKEN');
+      expect(sessoes.assertActive).toHaveBeenCalledOnce();
+      expect(usuarios.hasActiveStatus).toHaveBeenCalledOnce();
+      const logout = await agent.post('/auth/logout').send({}).expect(200);
+      expect(logout.headers['set-cookie'][0]).toContain('Expires=Thu, 01 Jan 1970');
+      expect(sessions.get(sid)?.revoked).toBe(true);
+      await request(app.getHttpServer()).get('/auth/me')
+        .set('Authorization', `Bearer ${token}`).expect(401);
+    },
+  );
+
+  it('denies a legacy account without a persisted status', async () => {
+    await request(app.getHttpServer()).post('/auth/register').send(body).expect(201);
+    const stored = records.get(body.email)!;
+    stored.status = undefined as unknown as typeof stored.status;
+    const result = await request(app.getHttpServer())
+      .post('/auth/login').send({ email: body.email, password: body.password }).expect(401);
+    expect(result.body.error.code).toBe('INVALID_CREDENTIALS');
+  });
+
+  it('returns a standardized 503 when MongoDB cannot verify account status', async () => {
+    const registered = await request(app.getHttpServer()).post('/auth/register').send(body).expect(201);
+    usuarios.hasActiveStatus.mockRejectedValueOnce(new Error('MongoDB unavailable'));
+    const token = registered.body.data.access_token as string;
+    const unavailable = await request(app.getHttpServer()).get('/auth/me')
+      .set('Authorization', `Bearer ${token}`).expect(503);
+    expect(unavailable.body.error.code).toBe('AUTH_STATUS_UNAVAILABLE');
+    expect(JSON.stringify(unavailable.body)).not.toContain('MongoDB unavailable');
+    await request(app.getHttpServer()).get('/auth/me')
+      .set('Authorization', `Bearer ${token}`).expect(200);
+  });
+
+  it('returns 503 without issuing a token when MongoDB cannot read login credentials', async () => {
+    usuarios.findCredentials.mockRejectedValueOnce(new Error('MongoDB unavailable'));
+    const result = await request(app.getHttpServer()).post('/auth/login')
+      .send({ email: body.email, password: body.password }).expect(503);
+    expect(result.body.error.code).toBe('AUTH_STATUS_UNAVAILABLE');
+    expect(result.headers['set-cookie']).toBeUndefined();
+    expect(JSON.stringify(result.body)).not.toContain('access_token');
+    expect(sessoes.create).not.toHaveBeenCalled();
   });
 
   it('rejects missing, expired and revoked sessions despite a valid JWT', async () => {

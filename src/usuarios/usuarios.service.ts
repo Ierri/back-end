@@ -15,11 +15,15 @@ export class UsuariosService {
   }
 
   findCredentials(email: string) {
-    return this.usuarios.findOne({ email }).select('+senha_hash').exec();
+    return this.usuarios.findOne({ email }).select('+senha_hash').lean().exec();
   }
 
   findById(id: string) {
     return this.usuarios.findById(id).exec();
+  }
+
+  hasActiveStatus(id: string) {
+    return this.usuarios.exists({ _id: id, status: 'ativo' });
   }
 
   async create(data: Pick<Usuario, 'nome' | 'email' | 'senha_hash'>) {

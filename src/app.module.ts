@@ -8,6 +8,7 @@ import { UsuariosModule } from './usuarios/usuarios.module.js';
 import { ApiHttpModule } from './common/http/api-http.module.js';
 import { PublicacoesModule } from './publicacoes/publicacoes.module.js';
 import { ComentariosModule } from './comentarios/comentarios.module.js';
+import { PerfisModule } from './perfis/perfis.module.js';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { ComentariosModule } from './comentarios/comentarios.module.js';
     AuthModule,
     PublicacoesModule,
     ComentariosModule,
+    PerfisModule,
   ],
   controllers: [AppController],
   providers: [AppService],

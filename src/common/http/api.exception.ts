@@ -32,6 +32,14 @@ export const API_ERRORS = {
     status: HttpStatus.CONFLICT,
     message: 'E-mail ou username já cadastrado.',
   },
+  USERNAME_ALREADY_EXISTS: {
+    status: HttpStatus.CONFLICT,
+    message: 'Username já cadastrado.',
+  },
+  TECNOLOGIAS_INVALIDAS: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'Selecione apenas tecnologias existentes e ativas.',
+  },
   INVALID_CREDENTIALS: {
     status: HttpStatus.UNAUTHORIZED,
     message: 'E-mail ou senha inválidos.',
@@ -48,9 +56,25 @@ export const API_ERRORS = {
     status: HttpStatus.UNAUTHORIZED,
     message: 'Token inválido ou expirado.',
   },
+  AUTH_STATUS_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message: 'Não foi possível validar a conta agora. Tente novamente mais tarde.',
+  },
   PUBLICACAO_NOT_FOUND: {
     status: HttpStatus.NOT_FOUND,
     message: 'Publicação não encontrada.',
+  },
+  VOTO_USER_INACTIVE: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'Esta conta não pode votar.',
+  },
+  VOTO_OPERATION_PENDING: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message: 'A operação do voto ainda não foi concluída. Tente novamente mais tarde.',
+  },
+  VOTO_WRITE_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message: 'Não foi possível salvar o voto agora. Tente novamente mais tarde.',
   },
   COMENTARIO_NOT_FOUND: {
     status: HttpStatus.NOT_FOUND,
