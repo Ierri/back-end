@@ -54,10 +54,15 @@ export class PublicacoesService {
 
   async list(query: ListPublicacoesDto, viewerId?: string) {
     const authorId = query.autorId?.toLowerCase() ?? null;
+    if (query.escopo === 'seguindo' && authorId)
+      throw new ApiException('VALIDATION_ERROR', [{ field: 'autorId', message: 'autorId não pode ser combinado com escopo=seguindo.' }]);
+    if (query.escopo === 'seguindo' && !viewerId)
+      throw new ApiException('AUTH_REQUIRED');
     const scope = {
       authorId,
       owner: authorId !== null && authorId === viewerId?.toLowerCase(),
       viewerId: viewerId?.toLowerCase() ?? null,
+      feed: query.escopo === 'seguindo' ? 'seguindo' as const : 'geral' as const,
     };
     const position = query.cursor
       ? this.cursor.decode(query.cursor, scope)
@@ -108,7 +113,9 @@ export class PublicacoesService {
     position: { publishedAt: Date; id: Types.ObjectId } | null,
     viewerId?: string,
   ) {
-    const visibility = await this.access.listVisibility(viewerId, authorId);
+    const visibility = query.escopo === 'seguindo'
+      ? await this.access.followingVisibility(viewerId!)
+      : await this.access.listVisibility(viewerId, authorId);
     const filter = {
       status: 'publicada' as const,
       ...(authorId ? { autor_id: new Types.ObjectId(authorId) } : {}),
@@ -157,7 +164,8 @@ export class PublicacoesService {
         hasMore && last
           ? this.cursor.encode(
               { publishedAt: last.publicada_em!, id: last._id },
-              { authorId, owner, viewerId: viewerId?.toLowerCase() ?? null },
+              { authorId, owner, viewerId: viewerId?.toLowerCase() ?? null,
+                feed: query.escopo === 'seguindo' ? 'seguindo' : 'geral' },
             )
           : null,
       hasMore,

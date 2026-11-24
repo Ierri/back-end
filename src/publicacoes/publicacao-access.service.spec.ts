@@ -87,6 +87,27 @@ describe('PublicacaoAccessService', () => {
     expect(await service.listVisibility(follower.toString())).toEqual({ visibilidade: 'publico' });
   });
 
+  it('selects only accepted active followed authors for the Following feed', async () => {
+    const { service, active, accepted, followers } = setup();
+    expect(await service.followingVisibility(follower.toString())).toEqual({
+      autor_id: { $in: [author] },
+    });
+    accepted.clear();
+    expect(await service.followingVisibility(follower.toString())).toEqual({ autor_id: { $in: [] } });
+    accepted.add(follower.toString());
+    active.delete(author.toString());
+    expect(await service.followingVisibility(follower.toString())).toEqual({ autor_id: { $in: [] } });
+    active.add(author.toString());
+    followers.distinct.mockReturnValueOnce(query([author, follower]));
+    expect(await service.followingVisibility(follower.toString())).toEqual({ autor_id: { $in: [author] } });
+  });
+
+  it('rejects an inactive viewer instead of returning a public feed', async () => {
+    const { service, active } = setup();
+    active.delete(follower.toString());
+    await expect(service.followingVisibility(follower.toString())).rejects.toMatchObject({ status: 401 });
+  });
+
   it('guards writes against a change in status or visibility', () => {
     const { service, restricted } = setup();
     expect(service.writeFilter(restricted)).toEqual(restricted);
