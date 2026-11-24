@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import type { Model, QueryFilter } from 'mongoose';
+import { ApiException } from '../common/http/api.exception.js';
 import { Seguidor } from '../usuarios/schemas/seguidor.schema.js';
 import { Usuario } from '../usuarios/schemas/usuario.schema.js';
 import type { Publicacao } from './schemas/publicacao.schema.js';
@@ -45,6 +46,24 @@ export class PublicacaoAccessService {
       ]);
       return activeAuthor && relation ? {} : { visibilidade: 'publico' };
     }
+    const activeAuthors = await this.activeFollowedAuthors(viewer);
+    return {
+      $or: [
+        { visibilidade: 'publico' },
+        { autor_id: viewer },
+        ...(activeAuthors.length ? [{ visibilidade: 'seguidores' as const, autor_id: { $in: activeAuthors } }] : []),
+      ],
+    };
+  }
+
+  async followingVisibility(viewerId: string): Promise<QueryFilter<Publicacao>> {
+    const viewer = new Types.ObjectId(viewerId);
+    if (!await this.usuarios.exists({ _id: viewer, status: 'ativo' }))
+      throw new ApiException('AUTH_REQUIRED');
+    return { autor_id: { $in: await this.activeFollowedAuthors(viewer) } };
+  }
+
+  private async activeFollowedAuthors(viewer: Types.ObjectId) {
     const followed = await this.seguidores.distinct('seguido_id', {
       seguidor_id: viewer,
       status: 'aceito',
@@ -52,13 +71,7 @@ export class PublicacaoAccessService {
     const activeAuthors = followed.length
       ? await this.usuarios.find({ _id: { $in: followed }, status: 'ativo' }).select('_id').lean().exec()
       : [];
-    return {
-      $or: [
-        { visibilidade: 'publico' },
-        { autor_id: viewer },
-        ...(activeAuthors.length ? [{ visibilidade: 'seguidores' as const, autor_id: { $in: activeAuthors.map((author) => author._id) } }] : []),
-      ],
-    };
+    return activeAuthors.map((author) => author._id).filter((id) => !id.equals(viewer));
   }
 
   writeFilter(publication: PublicationAccess) {

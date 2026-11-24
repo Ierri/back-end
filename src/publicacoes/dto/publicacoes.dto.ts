@@ -14,6 +14,10 @@ export const listPublicacoesSchema = z.strictObject({
     .regex(/^[A-Za-z0-9_-]{40,512}$/)
     .optional(),
   autorId: publicacaoIdSchema.optional(),
+  escopo: z.literal('seguindo').optional(),
+}).refine((query) => !query.escopo || !query.autorId, {
+  path: ['autorId'],
+  message: 'autorId não pode ser combinado com escopo=seguindo.',
 });
 
 export const createPublicacaoSchema = z.strictObject({

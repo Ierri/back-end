@@ -15,6 +15,7 @@ export type PublicationCursorScope = {
   authorId: string | null;
   owner: boolean;
   viewerId?: string | null;
+  feed?: 'geral' | 'seguindo';
 };
 
 export type PublicationCursorPosition = {
@@ -33,17 +34,19 @@ export class PublicacoesCursor {
   }
 
   encode(position: PublicationCursorPosition, scope: PublicationCursorScope) {
+    const following = scope.feed === 'seguindo';
     const iv = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', this.key, iv);
     const payload = Buffer.from(
       JSON.stringify({
-        v: 3,
+        v: following ? 4 : 3,
         s: CURSOR_ORDER,
         t: position.publishedAt.getTime(),
         i: position.id.toString(),
         a: scope.authorId,
         o: scope.owner,
         u: scope.viewerId ?? null,
+        ...(following ? { f: 'seguindo' } : {}),
       }),
     );
     const encrypted = Buffer.concat([cipher.update(payload), cipher.final()]);
@@ -57,6 +60,7 @@ export class PublicacoesCursor {
     scope: PublicationCursorScope,
   ): PublicationCursorPosition {
     try {
+      const following = scope.feed === 'seguindo';
       const bytes = Buffer.from(cursor, 'base64url');
       if (bytes.length < 29 || bytes.toString('base64url') !== cursor) {
         throw new Error('Invalid cursor encoding');
@@ -76,7 +80,7 @@ export class PublicacoesCursor {
         typeof payload !== 'object' ||
         payload === null ||
         !('v' in payload) ||
-        (payload.v !== 2 && payload.v !== 3) ||
+        (payload.v !== 2 && payload.v !== 3 && payload.v !== 4) ||
         !('s' in payload) ||
         payload.s !== CURSOR_ORDER ||
         !('t' in payload) ||
@@ -90,7 +94,11 @@ export class PublicacoesCursor {
         payload.a !== scope.authorId ||
         !('o' in payload) ||
         payload.o !== scope.owner ||
-        (payload.v === 3 && (!('u' in payload) || payload.u !== (scope.viewerId ?? null)))
+        (following
+          ? payload.v !== 4 || !scope.viewerId || !('u' in payload) ||
+            payload.u !== scope.viewerId || !('f' in payload) || payload.f !== 'seguindo'
+          : payload.v === 4 ||
+            (payload.v === 3 && (!('u' in payload) || payload.u !== (scope.viewerId ?? null))))
       ) {
         throw new Error('Invalid cursor payload');
       }

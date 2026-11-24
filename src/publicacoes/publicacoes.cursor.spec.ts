@@ -1,4 +1,5 @@
 import type { ConfigService } from '@nestjs/config';
+import { createCipheriv, createHash, randomBytes } from 'node:crypto';
 import { Types } from 'mongoose';
 import { PublicacoesCursor } from './publicacoes.cursor.js';
 
@@ -35,5 +36,31 @@ describe('PublicacoesCursor', () => {
     expect(codec.decode(encoded, { authorId: null, owner: false, viewerId })).toEqual(position);
     expect(() => codec.decode(encoded, { authorId: null, owner: false, viewerId: new Types.ObjectId().toString() })).toThrow();
     expect(() => codec.decode(encoded, { authorId: null, owner: false })).toThrow();
+  });
+
+  it('isolates Following cursors from general and other viewers', () => {
+    const viewerId = new Types.ObjectId().toString();
+    const following = { authorId: null, owner: false, viewerId, feed: 'seguindo' as const };
+    const general = { authorId: null, owner: false, viewerId };
+    const cursor = codec.encode(position, following);
+    expect(codec.decode(cursor, following)).toEqual(position);
+    expect(() => codec.decode(cursor, general)).toThrow();
+    expect(() => codec.decode(cursor, { ...following, viewerId: new Types.ObjectId().toString() })).toThrow();
+    expect(() => codec.decode(codec.encode(position, general), following)).toThrow();
+  });
+
+  it('rejects a legacy general cursor in the Following feed', () => {
+    const viewerId = new Types.ObjectId().toString();
+    const iv = randomBytes(12);
+    const key = createHash('sha256').update('unit-test-secret-for-publication-cursors').digest();
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    const payload = Buffer.from(JSON.stringify({
+      v: 2, s: 'publicada_em_desc_id_desc', t: position.publishedAt.getTime(),
+      i: position.id.toString(), a: null, o: false,
+    }));
+    const encrypted = Buffer.concat([cipher.update(payload), cipher.final()]);
+    const legacy = Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString('base64url');
+    expect(codec.decode(legacy, { authorId: null, owner: false })).toEqual(position);
+    expect(() => codec.decode(legacy, { authorId: null, owner: false, viewerId, feed: 'seguindo' })).toThrow();
   });
 });

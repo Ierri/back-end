@@ -112,6 +112,7 @@ function setup(verifier: MediaVerifier = new UnavailableMediaVerifier()) {
     canRead: vi.fn().mockResolvedValue(true),
     listVisibility: vi.fn().mockImplementation(async (viewerId?: string, selectedAuthor?: string | null) =>
       selectedAuthor === viewerId?.toLowerCase() ? {} : { visibilidade: 'publico' }),
+    followingVisibility: vi.fn().mockResolvedValue({ autor_id: { $in: [authorId] } }),
   };
   const service = new PublicacoesService(
     publications as unknown as Model<Publicacao>,
@@ -549,6 +550,41 @@ describe('PublicacoesService', () => {
 });
 
 describe('PublicacoesService list', () => {
+  it('validates the Following scope and requires authentication', async () => {
+    const { service, publications } = setup();
+    expect(listPublicacoesSchema.safeParse({ escopo: 'seguindo', autorId: authorId.toString() }).success).toBe(false);
+    expect(listPublicacoesSchema.safeParse({ escopo: 'outro' }).success).toBe(false);
+    await expect(service.list({ limite: 20, escopo: 'seguindo' })).rejects.toMatchObject({ status: 401 });
+    await expect(service.list({ limite: 20, escopo: 'seguindo', autorId: authorId.toString() }, authorId.toString()))
+      .rejects.toMatchObject({ status: 400 });
+    expect(publications.find).not.toHaveBeenCalled();
+  });
+
+  it('filters the Following feed before sorting and limiting without using public cache', async () => {
+    const { service, publications, cache, access } = setup();
+    const viewerId = new Types.ObjectId().toString();
+    cache.pageAddress.mockResolvedValue({ key: 'public-page' });
+    await service.list({ limite: 2, escopo: 'seguindo' }, viewerId);
+    expect(access.followingVisibility).toHaveBeenCalledWith(viewerId);
+    expect(publications.find).toHaveBeenCalledWith({
+      status: 'publicada', autor_id: { $in: [authorId] },
+    });
+    expect(publications.find.mock.results[0].value.sort).toHaveBeenCalledWith({ publicada_em: -1, _id: -1 });
+    expect(publications.find.mock.results[0].value.limit).toHaveBeenCalledWith(3);
+    expect(cache.pageAddress).not.toHaveBeenCalled();
+    expect(cache.readPage).not.toHaveBeenCalled();
+    expect(cache.writePage).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty Following page without loading authors', async () => {
+    const { service, publications, users, access } = setup();
+    access.followingVisibility.mockResolvedValue({ autor_id: { $in: [] } });
+    const result = await service.list({ limite: 20, escopo: 'seguindo' }, new Types.ObjectId().toString());
+    expect(result).toEqual({ items: [], nextCursor: null, hasMore: false });
+    expect(publications.find.mock.calls[0][0]).toEqual({ status: 'publicada', autor_id: { $in: [] } });
+    expect(users.find).not.toHaveBeenCalled();
+  });
+
   it('keeps authenticated list pages out of the public Redis cache', async () => {
     const { service, cache, access } = setup();
     cache.pageAddress.mockResolvedValue({ key: 'public-page' });
@@ -568,6 +604,31 @@ describe('PublicacoesService list', () => {
   const posts = ids.map((id) =>
     publication({ _id: new Types.ObjectId(id), publicada_em: publishedAt }),
   );
+
+  it('uses a viewer-bound Following cursor with authorization before pagination', async () => {
+    const { service, publications, cursor } = setup();
+    const viewerId = new Types.ObjectId().toString();
+    publications.find.mockReturnValueOnce(query([posts[2], posts[1]]))
+      .mockReturnValueOnce(query([posts[1]]));
+    const first = await service.list({ limite: 1, escopo: 'seguindo' }, viewerId);
+    expect(first.items.map((item) => item.id)).toEqual([ids[2]]);
+    const position = cursor.decode(first.nextCursor!, {
+      authorId: null, owner: false, viewerId, feed: 'seguindo',
+    });
+    expect(position.id.toString()).toBe(ids[2]);
+    const second = await service.list({ limite: 1, escopo: 'seguindo', cursor: first.nextCursor! }, viewerId);
+    expect(second.items.map((item) => item.id)).toEqual([ids[1]]);
+    expect(publications.find.mock.calls[1][0]).toEqual({
+      status: 'publicada',
+      $and: [
+        { autor_id: { $in: [authorId] } },
+        { $or: [
+          { publicada_em: { $lt: publishedAt } },
+          { publicada_em: publishedAt, _id: { $lt: new Types.ObjectId(ids[2]) } },
+        ] },
+      ],
+    });
+  });
 
   it('places a later publication first even when it was created earlier', async () => {
     const { service, publications } = setup();
