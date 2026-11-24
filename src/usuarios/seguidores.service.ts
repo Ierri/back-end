@@ -56,7 +56,7 @@ export class SeguidoresService implements OnModuleInit, OnModuleDestroy {
         if (!relation) throw new ApiException('SEGUIDOR_WRITE_UNAVAILABLE');
       }
     }
-    return this.mutationResult(actorId, targetId, this.state(relation.status));
+    return this.mutationResult(actorId, targetId, this.state(relation.status), actorId);
   }
 
   async unfollow(actorId: string, targetId: string) {
@@ -68,7 +68,7 @@ export class SeguidoresService implements OnModuleInit, OnModuleDestroy {
       const remaining = await this.seguidores.exists(pair);
       if (remaining) throw new ApiException('SEGUIDOR_WRITE_UNAVAILABLE');
     }
-    return this.mutationResult(actorId, targetId, 'nenhuma');
+    return this.mutationResult(actorId, targetId, 'nenhuma', actorId);
   }
 
   async accept(actorId: string, requestId: string) {
@@ -88,7 +88,7 @@ export class SeguidoresService implements OnModuleInit, OnModuleDestroy {
     }
     if (!relation) relation = await this.seguidores.findOne(filter).exec();
     if (relation?.status !== 'aceito') throw new ApiException('SEGUIDOR_REQUEST_NOT_FOUND');
-    return this.mutationResult(relation.seguidor_id.toString(), actorId, 'aceita');
+    return this.mutationResult(relation.seguidor_id.toString(), actorId, 'aceita', actorId);
   }
 
   async decline(actorId: string, requestId: string) {
@@ -238,9 +238,22 @@ export class SeguidoresService implements OnModuleInit, OnModuleDestroy {
     return processed;
   }
 
-  private async mutationResult(actorId: string, targetId: string, estado: RelationState) {
-    const [actor, target] = await Promise.all([this.counts(actorId), this.counts(targetId)]);
-    return { estado, contadores: { seguidores: target.seguidores, seguindo: actor.seguindo } };
+  private async mutationResult(senderId: string, targetId: string, estado: RelationState, viewerId: string) {
+    const [sender, target] = await Promise.all([this.counts(senderId), this.counts(targetId)]);
+    if (viewerId === targetId)
+      return { estado, contadores: { seguidores: target.seguidores, seguindo: target.seguindo } };
+    const publicTarget = await this.usuarios.exists({
+      _id: targetId,
+      status: 'ativo',
+      visibilidade_perfil: { $ne: 'privado' },
+    });
+    return {
+      estado,
+      contadores: {
+        ...(publicTarget ? { seguidores: target.seguidores } : {}),
+        seguindo: sender.seguindo,
+      },
+    };
   }
 
   private state(status?: Seguidor['status']): RelationState {

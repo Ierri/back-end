@@ -153,6 +153,8 @@ describe.runIf(config)('seguidores com MongoDB e Redis locais', () => {
     await privateProfile(bob).expect(200);
     const result = await follow(alice, bob).expect(200);
     expect(result.body.data.estado).toBe('pendente');
+    expect(result.body.data.contadores).toEqual({ seguindo: 0 });
+    expect(result.body.data.contadores).not.toHaveProperty('seguidores');
     const stored = await followers().findOne(pair(alice, bob));
     expect(stored?.status).toBe('pendente');
     expect(stored?.aceito_em).toBeNull();
@@ -171,6 +173,7 @@ describe.runIf(config)('seguidores com MongoDB e Redis locais', () => {
     const path = `/usuarios/me/solicitacoes/${stored!._id.toString()}/aceitar`;
     const accepted = await request(app.getHttpServer()).put(path).set(auth(bob)).expect(200);
     expect(accepted.body.data.estado).toBe('aceita');
+    expect(accepted.body.data.contadores).toEqual({ seguidores: 1, seguindo: 0 });
     expect((await followers().findOne(pair(alice, bob)))?.aceito_em).toBeInstanceOf(Date);
     await request(app.getHttpServer()).put(path).set(auth(bob)).expect(200);
     expect(await followers().countDocuments(pair(alice, bob))).toBe(1);
@@ -193,8 +196,10 @@ describe.runIf(config)('seguidores com MongoDB e Redis locais', () => {
   it('lets the sender cancel a pending request and repeat cancellation safely', async () => {
     await privateProfile(bob).expect(200);
     await follow(alice, bob).expect(200);
-    expect((await unfollow(alice, bob).expect(200)).body.data.estado).toBe('nenhuma');
-    expect((await unfollow(alice, bob).expect(200)).body.data.estado).toBe('nenhuma');
+    const cancelled = await unfollow(alice, bob).expect(200);
+    expect(cancelled.body.data).toEqual({ estado: 'nenhuma', contadores: { seguindo: 0 } });
+    const repeated = await unfollow(alice, bob).expect(200);
+    expect(repeated.body.data).toEqual({ estado: 'nenhuma', contadores: { seguindo: 0 } });
     expect(await followers().countDocuments(pair(alice, bob))).toBe(0);
     expect(await ownCounts(alice)).toMatchObject({ seguidores: 0, seguindo: 0 });
     expect(await ownCounts(bob)).toMatchObject({ seguidores: 0, seguindo: 0 });
@@ -202,7 +207,8 @@ describe.runIf(config)('seguidores com MongoDB e Redis locais', () => {
 
   it('unfollows an accepted relationship without leaving counted records', async () => {
     await follow(alice, bob).expect(200);
-    await unfollow(alice, bob).expect(200);
+    expect((await unfollow(alice, bob).expect(200)).body.data.contadores)
+      .toEqual({ seguidores: 0, seguindo: 0 });
     await unfollow(alice, bob).expect(200);
     expect(await followers().countDocuments(pair(alice, bob))).toBe(0);
     expect(await ownCounts(alice)).toMatchObject({ seguidores: 0, seguindo: 0 });

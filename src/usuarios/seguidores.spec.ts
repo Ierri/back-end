@@ -26,6 +26,7 @@ function setup() {
     findById: vi.fn(),
     find: vi.fn(),
     updateOne: vi.fn(),
+    exists: vi.fn().mockResolvedValue({ _id: new Types.ObjectId(targetId) }),
   };
   const followers = {
     findOne: vi.fn().mockReturnValue(query(null)),
@@ -69,6 +70,55 @@ describe('SeguidoresService', () => {
     expect(followers.create).not.toHaveBeenCalled();
   });
 
+  it('omits the target follower total after a private follow and still reconciles both accounts', async () => {
+    const { service, users, followers, counts } = setup();
+    users.findOne.mockReturnValue(query({ _id: new Types.ObjectId(targetId), visibilidade_perfil: 'privado' }));
+    users.exists.mockResolvedValue(null);
+    followers.findOne.mockReturnValue(query({ status: 'pendente' }));
+    counts.mockResolvedValueOnce({ seguidores: 2, seguindo: 3 })
+      .mockResolvedValueOnce({ seguidores: 7, seguindo: 4 });
+    await expect(service.follow(actorId, targetId)).resolves.toEqual({
+      estado: 'pendente',
+      contadores: { seguindo: 3 },
+    });
+    expect(counts).toHaveBeenCalledTimes(2);
+    expect(users.exists).toHaveBeenCalledWith({
+      _id: targetId,
+      status: 'ativo',
+      visibilidade_perfil: { $ne: 'privado' },
+    });
+  });
+
+  it('hides a target that became private before a public follow response', async () => {
+    const { service, users, followers } = setup();
+    followers.findOne.mockReturnValue(query(null));
+    followers.create.mockResolvedValue({ status: 'aceito' });
+    users.exists.mockResolvedValue(null);
+    await expect(service.follow(actorId, targetId)).resolves.toEqual({
+      estado: 'aceita',
+      contadores: { seguindo: 1 },
+    });
+  });
+
+  it('preserves both public counters in a follow response', async () => {
+    const { service, followers } = setup();
+    followers.findOne.mockReturnValue(query({ status: 'aceito' }));
+    await expect(service.follow(actorId, targetId)).resolves.toEqual({
+      estado: 'aceita',
+      contadores: { seguidores: 1, seguindo: 1 },
+    });
+  });
+
+  it('omits the private target total when a request is cancelled', async () => {
+    const { service, users, followers } = setup();
+    followers.deleteOne.mockReturnValue(query({ deletedCount: 1 }));
+    users.exists.mockResolvedValue(null);
+    await expect(service.unfollow(actorId, targetId)).resolves.toEqual({
+      estado: 'nenhuma',
+      contadores: { seguindo: 1 },
+    });
+  });
+
   it('accepts only a pending request addressed to the actor', async () => {
     const { service, followers } = setup();
     const pending = { _id: new Types.ObjectId(relationId), seguidor_id: new Types.ObjectId(actorId), seguido_id: new Types.ObjectId(targetId), status: 'pendente' };
@@ -80,6 +130,27 @@ describe('SeguidoresService', () => {
       expect.objectContaining({ $set: expect.objectContaining({ status: 'aceito' }) }),
       expect.any(Object),
     );
+  });
+
+  it('returns the private recipient own counters after acceptance, without the sender following total', async () => {
+    const { service, users, followers, counts } = setup();
+    const pending = {
+      _id: new Types.ObjectId(relationId),
+      seguidor_id: new Types.ObjectId(actorId),
+      seguido_id: new Types.ObjectId(targetId),
+      status: 'pendente',
+    };
+    followers.findOne.mockReturnValue(query(pending));
+    followers.findOneAndUpdate.mockReturnValue(query({ ...pending, status: 'aceito' }));
+    counts.mockResolvedValueOnce({ seguidores: 2, seguindo: 9 })
+      .mockResolvedValueOnce({ seguidores: 5, seguindo: 3 });
+    users.exists.mockResolvedValue(null);
+    await expect(service.accept(targetId, relationId)).resolves.toEqual({
+      estado: 'aceita',
+      contadores: { seguidores: 5, seguindo: 3 },
+    });
+    expect(counts).toHaveBeenCalledTimes(2);
+    expect(users.exists).not.toHaveBeenCalled();
   });
 
   it('recovers acceptance after a response is lost without accepting twice', async () => {
