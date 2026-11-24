@@ -36,6 +36,12 @@ export class Voto {
   @Prop({ type: VotoOperacaoSchema, default: null })
   operacao: VotoOperacao | null;
 
+  @Prop({ type: Date, default: null })
+  notificacao_upvote_em: Date | null;
+
+  @Prop({ type: Boolean, default: false })
+  notificacao_upvote_pendente: boolean;
+
   criado_em: Date;
   atualizado_em: Date;
 }
@@ -44,3 +50,5 @@ export type VotoDocument = HydratedDocument<Voto>;
 export const VotoSchema = SchemaFactory.createForClass(Voto);
 VotoSchema.index({ publicacao_id: 1, usuario_id: 1 }, { unique: true });
 VotoSchema.index({ usuario_id: 1, atualizado_em: -1, _id: -1 });
+VotoSchema.index({ valor: 1, notificacao_upvote_pendente: 1, _id: 1 });
+VotoSchema.index({ notificacao_upvote_pendente: 1, _id: 1 });

@@ -149,6 +149,7 @@ jobs:
             { file: 'salvos.e2e-spec.ts', label: 'Publicações salvas', minimum: 10 },
             { file: 'criadores.e2e-spec.ts', label: 'Contadores e ranking de criadores', minimum: 11 },
             { file: 'admin-tecnologias.e2e-spec.ts', label: 'Administração de tecnologias', minimum: 8 },
+            { file: 'notificacoes.e2e-spec.ts', label: 'Notificações', minimum: 13 },
           ]) {
             const suite = report.testResults.find(({ name }) => {
               const path = name.replaceAll('\\', '/');

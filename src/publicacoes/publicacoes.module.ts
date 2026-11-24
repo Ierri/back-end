@@ -33,11 +33,13 @@ import { PublicacaoSalva, PublicacaoSalvaSchema } from './schemas/publicacao-sal
 import { SalvosController } from './salvos.controller.js';
 import { SalvosCursor } from './salvos.cursor.js';
 import { SalvosService } from './salvos.service.js';
+import { NotificationProducerModule } from '../notificacoes/notification-producer.module.js';
 
 @Module({
   imports: [
     AuthModule,
     UsuariosModule,
+    NotificationProducerModule,
     MongooseModule.forFeature([
       { name: Publicacao.name, schema: PublicacaoSchema },
       { name: Usuario.name, schema: UsuarioSchema },

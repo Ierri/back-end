@@ -31,6 +31,9 @@ export class Comentario {
   @Prop({ type: Date, default: null })
   editado_em: Date | null;
 
+  @Prop({ type: Boolean, default: false })
+  notificacao_pendente: boolean;
+
   criado_em: Date;
   atualizado_em: Date;
 }
@@ -53,3 +56,4 @@ ComentarioSchema.pre('validate', function () {
 });
 
 ComentarioSchema.index({ publicacao_id: 1, comentario_pai_id: 1, criado_em: 1, _id: 1 });
+ComentarioSchema.index({ notificacao_pendente: 1, _id: 1 });

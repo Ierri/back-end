@@ -76,6 +76,10 @@ export const API_ERRORS = {
     status: HttpStatus.FORBIDDEN,
     message: 'Esta conta não tem permissão para realizar a operação.',
   },
+  NOTIFICACAO_NOT_FOUND: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'Notificação não encontrada.',
+  },
   TECNOLOGIA_NOT_FOUND: {
     status: HttpStatus.NOT_FOUND,
     message: 'Tecnologia não encontrada.',

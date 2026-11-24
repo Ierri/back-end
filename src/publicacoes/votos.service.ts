@@ -12,10 +12,11 @@ import { Publicacao } from './schemas/publicacao.schema.js';
 import type { PublicacaoDocument } from './schemas/publicacao.schema.js';
 import { Voto } from './schemas/voto.schema.js';
 import type { VotoDocument } from './schemas/voto.schema.js';
+import { NotificationProducerService } from '../notificacoes/notification-producer.service.js';
 
 type VoteValue = 1 | -1;
 type VoteCounts = { upvotes: number; downvotes: number; score: number };
-type Claim = { token: string; revision: number; expiresAt: Date };
+type Claim = { token: string; revision: number; expiresAt: Date; voteId: Types.ObjectId };
 type Reservation = Claim & { authorId: string };
 
 const FAR_FUTURE = new Date('9999-12-31T23:59:59.999Z');
@@ -24,6 +25,7 @@ const RECOVERY_BATCH = 100;
 
 @Injectable()
 export class VotosService implements OnModuleInit, OnModuleDestroy {
+  @Inject(NotificationProducerService) private notifications?: NotificationProducerService;
   @Inject(CreatorStatsService) private creatorStats?: CreatorStatsService;
   private readonly logger = new Logger(VotosService.name);
   private recoveryTimer?: ReturnType<typeof setInterval>;
@@ -95,7 +97,8 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
           $expr: { $gt: ['$operacao.expira_em', '$$NOW'] },
         },
         {
-          $set: { valor, 'operacao.estado': 'aplicada' },
+          $set: { valor, 'operacao.estado': 'aplicada',
+            ...(valor === 1 ? { notificacao_upvote_pendente: true } : {}) },
           $inc: { revisao: 1 },
         },
         { runValidators: true },
@@ -113,6 +116,8 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
       await this.releasePublication(publicationId, claim.token);
       const contadores = await this.reconcileCounter(publicationId);
       await this.clearVoteClaim(publicationId, userId, claim.token).catch(() => undefined);
+      if (valor === 1)
+        await this.notifications?.recordUpvote(claim.voteId.toString()).catch(() => undefined);
       return { valor, contadores };
     } catch {
       await this.invalidate(publicationId, reservation.authorId);
@@ -187,7 +192,7 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
       throw new ApiException('VOTO_WRITE_UNAVAILABLE');
     }
     if (!claimed?.operacao) throw new ApiException('VOTO_OPERATION_PENDING');
-    return { token, revision: claimed.revisao, expiresAt: claimed.operacao.expira_em };
+    return { token, revision: claimed.revisao, expiresAt: claimed.operacao.expira_em, voteId: claimed._id };
   }
 
   private async reservePublication(
