@@ -3,6 +3,8 @@ import { AuthModule } from '../auth/auth.module.js';
 import { OptionalAuthGuard } from '../publicacoes/optional-auth.guard.js';
 import { RequiredAuthGuard } from '../publicacoes/required-auth.guard.js';
 import { TecnologiasController } from '../tecnologias/tecnologias.controller.js';
+import { AdminTecnologiasController } from '../tecnologias/admin-tecnologias.controller.js';
+import { AdminRolesGuard } from '../tecnologias/admin-roles.guard.js';
 import { TecnologiasService } from '../tecnologias/tecnologias.service.js';
 import { PerfilReadService } from '../usuarios/perfil-read.service.js';
 import { PerfilUpdateService } from '../usuarios/perfil-update.service.js';
@@ -15,10 +17,11 @@ import { SeguidoresService } from '../usuarios/seguidores.service.js';
 
 @Module({
   imports: [AuthModule, UsuariosModule],
-  controllers: [UsuariosController, TecnologiasController, SeguidoresController],
+  controllers: [UsuariosController, TecnologiasController, AdminTecnologiasController, SeguidoresController],
   providers: [
     OptionalAuthGuard,
     RequiredAuthGuard,
+    AdminRolesGuard,
     PerfilReadService,
     PerfilUpdateService,
     UsuariosStacksService,

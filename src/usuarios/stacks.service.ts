@@ -24,14 +24,19 @@ export class UsuariosStacksService {
     }
 
     const ids = normalized.map((id) => new Types.ObjectId(id));
-    if (ids.length) {
+    const current = await this.usuarios.findOne({ _id: new Types.ObjectId(userId), status: 'ativo' })
+      .select('stack_ids').lean().exec();
+    if (!current) throw new ApiException('AUTH_REQUIRED');
+    const previous = new Set((current.stack_ids ?? []).map((id) => id.toString()));
+    const added = ids.filter((id) => !previous.has(id.toString()));
+    if (added.length) {
       const found = await this.tecnologias
-        .find({ _id: { $in: ids }, ativo: true })
+        .find({ _id: { $in: added }, ativo: true })
         .select('_id')
-        .limit(ids.length)
+        .limit(added.length)
         .lean()
         .exec();
-      if (found.length !== ids.length) throw new ApiException('TECNOLOGIAS_INVALIDAS');
+      if (found.length !== added.length) throw new ApiException('TECNOLOGIAS_INVALIDAS');
     }
 
     const updated = await this.usuarios
