@@ -13,9 +13,11 @@ import { ComentariosCursor } from './comentarios.cursor.js';
 import type { CreateComentarioDto, ListComentariosDto, UpdateComentarioDto } from './dto/comentarios.dto.js';
 import { Comentario } from './schemas/comentario.schema.js';
 import type { ComentarioDocument } from './schemas/comentario.schema.js';
+import { NotificationProducerService } from '../notificacoes/notification-producer.service.js';
 
 @Injectable()
 export class ComentariosService {
+  @Inject(NotificationProducerService) private notifications?: NotificationProducerService;
   constructor(
     @InjectModel(Comentario.name) private readonly comentarios: Model<Comentario>,
     @InjectModel(Publicacao.name) private readonly publicacoes: Model<Publicacao>,
@@ -112,11 +114,12 @@ export class ComentariosService {
       }
       const confirmed = await this.comentarios.updateOne(
         { _id: id, criacao_estado: 'pendente' },
-        { $set: { criacao_estado: 'confirmado' } },
+        { $set: { criacao_estado: 'confirmado', notificacao_pendente: true } },
       ).exec();
       if (confirmed.modifiedCount !== 1) throw new ApiException('COMENTARIO_OPERATION_PENDING');
       await this.releaseOperation(publicationId, operation);
       await this.cache.invalidate(publicationId, publication.autor_id.toString());
+      await this.notifications?.processComment(id.toString()).catch(() => undefined);
       return this.toResponse(created, author);
     } catch (error) {
       if (idempotencyKey && typeof error === 'object' && error !== null && 'code' in error && error.code === 11000) {

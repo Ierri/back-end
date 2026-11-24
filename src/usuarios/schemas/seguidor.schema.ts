@@ -19,6 +19,15 @@ export class Seguidor {
   @Prop({ type: Date, default: null })
   aceito_em: Date | null;
 
+  @Prop({ type: String, enum: ['publico', 'solicitacao'], default: null })
+  notificacao_origem: 'publico' | 'solicitacao' | null;
+
+  @Prop({ type: Boolean, default: false })
+  notificacao_follow_pendente: boolean;
+
+  @Prop({ type: Boolean, default: false })
+  notificacao_aceite_pendente: boolean;
+
   solicitado_em: Date;
   atualizado_em: Date;
 }
@@ -29,6 +38,8 @@ SeguidorSchema.index({ seguidor_id: 1, seguido_id: 1 }, { unique: true });
 SeguidorSchema.index({ seguido_id: 1, status: 1, solicitado_em: -1, _id: -1 });
 SeguidorSchema.index({ seguido_id: 1, status: 1, atualizado_em: -1, _id: -1 });
 SeguidorSchema.index({ seguidor_id: 1, status: 1, atualizado_em: -1, _id: -1 });
+SeguidorSchema.index({ notificacao_follow_pendente: 1, _id: 1 });
+SeguidorSchema.index({ notificacao_aceite_pendente: 1, _id: 1 });
 SeguidorSchema.pre('validate', function () {
   if (this.seguidor_id?.equals(this.seguido_id)) {
     this.invalidate('seguido_id', 'Não é permitido seguir a si mesmo.');

@@ -8,11 +8,13 @@ import { ComentariosController } from './comentarios.controller.js';
 import { ComentariosCursor } from './comentarios.cursor.js';
 import { ComentariosService } from './comentarios.service.js';
 import { Comentario, ComentarioSchema } from './schemas/comentario.schema.js';
+import { NotificationProducerModule } from '../notificacoes/notification-producer.module.js';
 
 @Module({
   imports: [
     AuthModule,
     PublicacoesModule,
+    NotificationProducerModule,
     MongooseModule.forFeature([
       { name: Comentario.name, schema: ComentarioSchema },
       { name: Publicacao.name, schema: PublicacaoSchema },

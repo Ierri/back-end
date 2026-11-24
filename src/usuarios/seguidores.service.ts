@@ -9,12 +9,14 @@ import type { SeguidorDocument } from './schemas/seguidor.schema.js';
 import { Usuario } from './schemas/usuario.schema.js';
 import { SeguidoresCursor } from './seguidores.cursor.js';
 import type { SeguidoresCursorScope } from './seguidores.cursor.js';
+import { NotificationProducerService } from '../notificacoes/notification-producer.service.js';
 
 type RelationState = 'nenhuma' | 'pendente' | 'aceita';
 type CounterSnapshot = { seguidores: number; seguindo: number };
 
 @Injectable()
 export class SeguidoresService implements OnModuleInit, OnModuleDestroy {
+  @Inject(NotificationProducerService) private notifications?: NotificationProducerService;
   private readonly logger = new Logger(SeguidoresService.name);
   private auditTimer?: ReturnType<typeof setInterval>;
   private auditTask?: Promise<number>;
@@ -50,13 +52,17 @@ export class SeguidoresService implements OnModuleInit, OnModuleDestroy {
           ...pair,
           status,
           aceito_em: status === 'aceito' ? new Date() : null,
+          notificacao_origem: status === 'aceito' ? 'publico' : 'solicitacao',
+          notificacao_follow_pendente: true,
         });
       } catch {
         relation = await this.seguidores.findOne(pair).exec();
         if (!relation) throw new ApiException('SEGUIDOR_WRITE_UNAVAILABLE');
       }
     }
-    return this.mutationResult(actorId, targetId, this.state(relation.status), actorId);
+    const result = await this.mutationResult(actorId, targetId, this.state(relation.status), actorId);
+    await this.notifications?.processRelation(relation._id.toString()).catch(() => undefined);
+    return result;
   }
 
   async unfollow(actorId: string, targetId: string) {
@@ -79,7 +85,7 @@ export class SeguidoresService implements OnModuleInit, OnModuleDestroy {
     try {
       relation = await this.seguidores.findOneAndUpdate(
         { ...filter, status: 'pendente' },
-        { $set: { status: 'aceito', aceito_em: new Date() } },
+        { $set: { status: 'aceito', aceito_em: new Date(), notificacao_aceite_pendente: true } },
         { returnDocument: 'after', runValidators: true },
       ).exec();
     } catch {
@@ -88,7 +94,9 @@ export class SeguidoresService implements OnModuleInit, OnModuleDestroy {
     }
     if (!relation) relation = await this.seguidores.findOne(filter).exec();
     if (relation?.status !== 'aceito') throw new ApiException('SEGUIDOR_REQUEST_NOT_FOUND');
-    return this.mutationResult(relation.seguidor_id.toString(), actorId, 'aceita', actorId);
+    const result = await this.mutationResult(relation.seguidor_id.toString(), actorId, 'aceita', actorId);
+    await this.notifications?.processRelation(relation._id.toString()).catch(() => undefined);
+    return result;
   }
 
   async decline(actorId: string, requestId: string) {

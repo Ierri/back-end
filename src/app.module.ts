@@ -9,6 +9,7 @@ import { ApiHttpModule } from './common/http/api-http.module.js';
 import { PublicacoesModule } from './publicacoes/publicacoes.module.js';
 import { ComentariosModule } from './comentarios/comentarios.module.js';
 import { PerfisModule } from './perfis/perfis.module.js';
+import { NotificacoesModule } from './notificacoes/notificacoes.module.js';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { PerfisModule } from './perfis/perfis.module.js';
     PublicacoesModule,
     ComentariosModule,
     PerfisModule,
+    NotificacoesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

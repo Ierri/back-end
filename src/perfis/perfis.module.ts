@@ -14,9 +14,10 @@ import { UsuariosStacksService } from '../usuarios/stacks.service.js';
 import { SeguidoresController } from '../usuarios/seguidores.controller.js';
 import { SeguidoresCursor } from '../usuarios/seguidores.cursor.js';
 import { SeguidoresService } from '../usuarios/seguidores.service.js';
+import { NotificationProducerModule } from '../notificacoes/notification-producer.module.js';
 
 @Module({
-  imports: [AuthModule, UsuariosModule],
+  imports: [AuthModule, UsuariosModule, NotificationProducerModule],
   controllers: [UsuariosController, TecnologiasController, AdminTecnologiasController, SeguidoresController],
   providers: [
     OptionalAuthGuard,
