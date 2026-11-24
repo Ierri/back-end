@@ -10,6 +10,7 @@ import { MediaCleanupService } from './media-cleanup.service.js';
 import { MediaInspectionService } from './media-inspection.service.js';
 import { MediaStorageService } from './media-storage.service.js';
 import { MediaUploadService } from './media-upload.service.js';
+import type { PublicacaoAccessService } from './publicacao-access.service.js';
 import { MongoMediaVerifierService } from './mongo-media-verifier.service.js';
 import { Publicacao } from './schemas/publicacao.schema.js';
 import { UploadMedia } from './schemas/upload-media.schema.js';
@@ -365,18 +366,11 @@ describe('MediaAccessService', () => {
     const media = record({ estado: 'vinculada', publicacao_id: post });
     const uploads = { findOne: vi.fn().mockReturnValue(query(media)) };
     const publications = {
-      findOne: vi.fn((filter: { $or: Array<Record<string, unknown>> }) =>
-        query(
-          visibility === 'publico' ||
-            filter.$or.some(
-              (clause) =>
-                'autor_id' in clause &&
-                (clause.autor_id as Types.ObjectId).equals(owner),
-            )
-            ? { _id: post, visibilidade: visibility }
-            : null,
-        ),
-      ),
+      findOne: vi.fn().mockReturnValue(query({ _id: post, status: 'publicada', autor_id: owner, visibilidade: visibility })),
+    };
+    const access = {
+      canRead: vi.fn().mockImplementation(async (_publication: unknown, viewerId?: string) =>
+        visibility === 'publico' || viewerId === owner.toString()),
     };
     const storage = {
       get: vi.fn().mockResolvedValue({
@@ -388,6 +382,7 @@ describe('MediaAccessService', () => {
       uploads as unknown as Model<UploadMedia>,
       publications as unknown as Model<Publicacao>,
       storage as unknown as MediaStorageService,
+      access as unknown as PublicacaoAccessService,
     );
     return { service, storage, uploads, publications };
   }
@@ -486,6 +481,7 @@ describe('video byte ranges', () => {
       uploads as unknown as Model<UploadMedia>,
       publications as unknown as Model<Publicacao>,
       storage as unknown as MediaStorageService,
+      { canRead: vi.fn().mockResolvedValue(true) } as unknown as PublicacaoAccessService,
     );
     for (const header of [
       'bytes=0-9',

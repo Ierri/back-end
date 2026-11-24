@@ -28,4 +28,12 @@ describe('PublicacoesCursor', () => {
       codec.decode(encoded, { authorId: null, owner: false }),
     ).toThrow();
   });
+
+  it('binds a restricted list cursor to the authenticated viewer', () => {
+    const viewerId = new Types.ObjectId().toString();
+    const encoded = codec.encode(position, { authorId: null, owner: false, viewerId });
+    expect(codec.decode(encoded, { authorId: null, owner: false, viewerId })).toEqual(position);
+    expect(() => codec.decode(encoded, { authorId: null, owner: false, viewerId: new Types.ObjectId().toString() })).toThrow();
+    expect(() => codec.decode(encoded, { authorId: null, owner: false })).toThrow();
+  });
 });

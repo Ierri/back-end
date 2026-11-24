@@ -5,6 +5,7 @@ import type { PublicacoesCacheService } from './publicacoes-cache.service.js';
 import { Publicacao } from './schemas/publicacao.schema.js';
 import { Voto, VotoSchema } from './schemas/voto.schema.js';
 import { VotosService } from './votos.service.js';
+import type { PublicacaoAccessService } from './publicacao-access.service.js';
 
 const publicationId = new Types.ObjectId();
 const authorId = new Types.ObjectId();
@@ -127,6 +128,10 @@ function setup() {
     publicationModel as unknown as Model<Publicacao>,
     users as unknown as Model<Usuario>,
     cache as unknown as PublicacoesCacheService,
+    {
+      canRead: vi.fn().mockResolvedValue(true),
+      writeFilter: vi.fn().mockReturnValue({ status: 'publicada' }),
+    } as unknown as PublicacaoAccessService,
   );
   return {
     service, post, cache, voteModel, publicationModel,
@@ -367,6 +372,7 @@ describe('votos: execução da query pelo Mongoose', () => {
         {} as Model<Publicacao>,
         {} as Model<Usuario>,
         {} as PublicacoesCacheService,
+        {} as PublicacaoAccessService,
       );
       const claim = await (service as unknown as {
         claimVote: (publicationId: string, userId: string) => Promise<{

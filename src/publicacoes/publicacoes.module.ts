@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuthModule } from '../auth/auth.module.js';
 import { Usuario, UsuarioSchema } from '../usuarios/schemas/usuario.schema.js';
+import { Seguidor, SeguidorSchema } from '../usuarios/schemas/seguidor.schema.js';
 import { MEDIA_VERIFIER } from './media-verifier.js';
 import { PublicacoesCacheClient } from './publicacoes-cache.client.js';
 import { PublicacoesCacheService } from './publicacoes-cache.service.js';
@@ -16,6 +17,7 @@ import { OptionalAuthGuard } from './optional-auth.guard.js';
 import { PublicacoesController } from './publicacoes.controller.js';
 import { PublicacoesCursor } from './publicacoes.cursor.js';
 import { PublicacoesService } from './publicacoes.service.js';
+import { PublicacaoAccessService } from './publicacao-access.service.js';
 import { RequiredAuthGuard } from './required-auth.guard.js';
 import { Publicacao, PublicacaoSchema } from './schemas/publicacao.schema.js';
 import {
@@ -34,6 +36,7 @@ import { PublicacaoSalva, PublicacaoSalvaSchema } from './schemas/publicacao-sal
     MongooseModule.forFeature([
       { name: Publicacao.name, schema: PublicacaoSchema },
       { name: Usuario.name, schema: UsuarioSchema },
+      { name: Seguidor.name, schema: SeguidorSchema },
       { name: UploadMedia.name, schema: UploadMediaSchema },
       { name: Voto.name, schema: VotoSchema },
       { name: PublicacaoSalva.name, schema: PublicacaoSalvaSchema },
@@ -42,6 +45,7 @@ import { PublicacaoSalva, PublicacaoSalvaSchema } from './schemas/publicacao-sal
   controllers: [PublicacoesController, MediaController, VotosController],
   providers: [
     PublicacoesService,
+    PublicacaoAccessService,
     PublicacoesCacheClient,
     PublicacoesCacheService,
     PublicacoesCursor,
@@ -56,6 +60,6 @@ import { PublicacaoSalva, PublicacaoSalvaSchema } from './schemas/publicacao-sal
     MediaCleanupService,
     { provide: MEDIA_VERIFIER, useClass: MongoMediaVerifierService },
   ],
-  exports: [OptionalAuthGuard, RequiredAuthGuard, PublicacoesCacheService],
+  exports: [OptionalAuthGuard, RequiredAuthGuard, PublicacoesCacheService, PublicacaoAccessService],
 })
 export class PublicacoesModule {}

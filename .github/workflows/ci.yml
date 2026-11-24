@@ -144,6 +144,7 @@ jobs:
             { file: 'perfis.e2e-spec.ts', label: 'Perfis e stacks', minimum: 12 },
             { file: 'votos.e2e-spec.ts', label: 'Votos', minimum: 27 },
             { file: 'seguidores.e2e-spec.ts', label: 'Seguidores', minimum: 19 },
+            { file: 'publicacoes-privacidade.e2e-spec.ts', label: 'Privacidade de publicações', minimum: 8 },
           ]) {
             const suite = report.testResults.find(({ name }) => {
               const path = name.replaceAll('\\', '/');

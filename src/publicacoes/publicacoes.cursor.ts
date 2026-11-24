@@ -14,6 +14,7 @@ const CURSOR_ORDER = 'publicada_em_desc_id_desc';
 export type PublicationCursorScope = {
   authorId: string | null;
   owner: boolean;
+  viewerId?: string | null;
 };
 
 export type PublicationCursorPosition = {
@@ -36,12 +37,13 @@ export class PublicacoesCursor {
     const cipher = createCipheriv('aes-256-gcm', this.key, iv);
     const payload = Buffer.from(
       JSON.stringify({
-        v: 2,
+        v: 3,
         s: CURSOR_ORDER,
         t: position.publishedAt.getTime(),
         i: position.id.toString(),
         a: scope.authorId,
         o: scope.owner,
+        u: scope.viewerId ?? null,
       }),
     );
     const encrypted = Buffer.concat([cipher.update(payload), cipher.final()]);
@@ -74,7 +76,7 @@ export class PublicacoesCursor {
         typeof payload !== 'object' ||
         payload === null ||
         !('v' in payload) ||
-        payload.v !== 2 ||
+        (payload.v !== 2 && payload.v !== 3) ||
         !('s' in payload) ||
         payload.s !== CURSOR_ORDER ||
         !('t' in payload) ||
@@ -87,7 +89,8 @@ export class PublicacoesCursor {
         !('a' in payload) ||
         payload.a !== scope.authorId ||
         !('o' in payload) ||
-        payload.o !== scope.owner
+        payload.o !== scope.owner ||
+        (payload.v === 3 && (!('u' in payload) || payload.u !== (scope.viewerId ?? null)))
       ) {
         throw new Error('Invalid cursor payload');
       }

@@ -17,6 +17,7 @@ import type { MediaVerifier, VerifiedMedia } from './media-verifier.js';
 import { PublicacoesCursor } from './publicacoes.cursor.js';
 import type { PublicacoesCacheService } from './publicacoes-cache.service.js';
 import { PublicacoesService } from './publicacoes.service.js';
+import type { PublicacaoAccessService } from './publicacao-access.service.js';
 import { Publicacao, PublicacaoSchema } from './schemas/publicacao.schema.js';
 
 const PublicationModel = model(Publicacao.name, PublicacaoSchema);
@@ -107,14 +108,20 @@ function setup(verifier: MediaVerifier = new UnavailableMediaVerifier()) {
     coalesce: vi.fn().mockImplementation((_key, load) => load()),
     invalidate: vi.fn().mockResolvedValue(undefined),
   };
+  const access = {
+    canRead: vi.fn().mockResolvedValue(true),
+    listVisibility: vi.fn().mockImplementation(async (viewerId?: string, selectedAuthor?: string | null) =>
+      selectedAuthor === viewerId?.toLowerCase() ? {} : { visibilidade: 'publico' }),
+  };
   const service = new PublicacoesService(
     publications as unknown as Model<Publicacao>,
     users as unknown as Model<Usuario>,
     verifier,
     cursor,
     cache as unknown as PublicacoesCacheService,
+    access as unknown as PublicacaoAccessService,
   );
-  return { service, publications, users, saved, author, cursor, cache };
+  return { service, publications, users, saved, author, cursor, cache, access };
 }
 
 function body() {
@@ -489,12 +496,9 @@ describe('PublicacoesService', () => {
     expect(publications.findOne).toHaveBeenCalledWith({
       _id: postId.toString(),
       status: 'publicada',
-      $or: [{ visibilidade: 'publico' }],
     });
     await service.findById(postId.toString(), authorId.toString());
-    expect(publications.findOne.mock.calls[1][0].$or).toContainEqual({
-      autor_id: authorId,
-    });
+    expect(publications.findOne.mock.calls[1][0]).toEqual({ _id: postId.toString(), status: 'publicada' });
     publications.findOne.mockReturnValueOnce(query(null));
     await expect(service.findById(postId.toString())).rejects.toMatchObject({
       status: 404,
@@ -545,6 +549,16 @@ describe('PublicacoesService', () => {
 });
 
 describe('PublicacoesService list', () => {
+  it('keeps authenticated list pages out of the public Redis cache', async () => {
+    const { service, cache, access } = setup();
+    cache.pageAddress.mockResolvedValue({ key: 'public-page' });
+    await service.list({ limite: 20 }, authorId.toString());
+    expect(access.listVisibility).toHaveBeenCalledWith(authorId.toString(), null);
+    expect(cache.pageAddress).not.toHaveBeenCalled();
+    expect(cache.readPage).not.toHaveBeenCalled();
+    expect(cache.writePage).not.toHaveBeenCalled();
+  });
+
   const publishedAt = new Date('2026-11-09T12:00:00.000Z');
   const ids = [
     '00000000000000000000000a',
@@ -621,10 +635,12 @@ describe('PublicacoesService list', () => {
     expect(second.nextCursor).toBeNull();
     expect(publications.find.mock.calls[1][0]).toEqual({
       status: 'publicada',
-      visibilidade: 'publico',
-      $or: [
-        { publicada_em: { $lt: publishedAt } },
-        { publicada_em: publishedAt, _id: { $lt: new Types.ObjectId(ids[1]) } },
+      $and: [
+        { visibilidade: 'publico' },
+        { $or: [
+          { publicada_em: { $lt: publishedAt } },
+          { publicada_em: publishedAt, _id: { $lt: new Types.ObjectId(ids[1]) } },
+        ] },
       ],
     });
     expect(
@@ -672,7 +688,7 @@ describe('PublicacoesService list', () => {
     expect(allIds).toEqual(pageIds.toReversed());
     expect(new Set(allIds).size).toBe(5);
     for (const [index, lastId] of [pageIds[3], pageIds[1]].entries()) {
-      expect(publications.find.mock.calls[index + 1][0].$or).toEqual([
+      expect(publications.find.mock.calls[index + 1][0].$and[1].$or).toEqual([
         { publicada_em: { $lt: publishedAt } },
         {
           publicada_em: publishedAt,
@@ -692,10 +708,7 @@ describe('PublicacoesService list', () => {
       visibilidade: 'publico',
     });
     await service.list(query, new Types.ObjectId().toString());
-    expect(publications.find.mock.calls[1][0]).toHaveProperty(
-      'visibilidade',
-      'publico',
-    );
+    expect(publications.find.mock.calls[1][0]).toHaveProperty('visibilidade', 'publico');
     await service.list(query, authorId.toString());
     expect(publications.find.mock.calls[2][0]).toEqual({
       status: 'publicada',
