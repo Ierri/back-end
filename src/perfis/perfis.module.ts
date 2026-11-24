@@ -9,10 +9,13 @@ import { PerfilUpdateService } from '../usuarios/perfil-update.service.js';
 import { UsuariosController } from '../usuarios/usuarios.controller.js';
 import { UsuariosModule } from '../usuarios/usuarios.module.js';
 import { UsuariosStacksService } from '../usuarios/stacks.service.js';
+import { SeguidoresController } from '../usuarios/seguidores.controller.js';
+import { SeguidoresCursor } from '../usuarios/seguidores.cursor.js';
+import { SeguidoresService } from '../usuarios/seguidores.service.js';
 
 @Module({
   imports: [AuthModule, UsuariosModule],
-  controllers: [UsuariosController, TecnologiasController],
+  controllers: [UsuariosController, TecnologiasController, SeguidoresController],
   providers: [
     OptionalAuthGuard,
     RequiredAuthGuard,
@@ -20,6 +23,8 @@ import { UsuariosStacksService } from '../usuarios/stacks.service.js';
     PerfilUpdateService,
     UsuariosStacksService,
     TecnologiasService,
+    SeguidoresCursor,
+    SeguidoresService,
   ],
 })
 export class PerfisModule {}

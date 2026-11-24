@@ -12,6 +12,7 @@ import { AppModule } from '../src/app.module.js';
 import { RedisSessionClient } from '../src/auth/redis-session.client.js';
 import { SessoesService } from '../src/auth/sessoes.service.js';
 import { UsuariosService } from '../src/usuarios/usuarios.service.js';
+import { SeguidoresService } from '../src/usuarios/seguidores.service.js';
 
 const baseMongoUri = process.env.MONGODB_URI;
 const baseRedisUrl = process.env.REDIS_URL;
@@ -89,6 +90,7 @@ describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
   });
 
   afterAll(async () => {
+    if (app) await app.get(SeguidoresService).onModuleDestroy();
     if (inspector.isReady) {
       const keys = await inspector.keys(`${testConfig!.prefix}*`);
       if (keys.length) await inspector.del(keys);

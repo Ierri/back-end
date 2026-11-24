@@ -11,6 +11,7 @@ import { AppModule } from '../src/app.module.js';
 import { configureHttp } from '../src/common/http/configure-http.js';
 import { PerfilUpdateService } from '../src/usuarios/perfil-update.service.js';
 import { UsuariosStacksService } from '../src/usuarios/stacks.service.js';
+import { SeguidoresService } from '../src/usuarios/seguidores.service.js';
 
 const baseMongoUri = process.env.MONGODB_URI;
 const baseRedisUrl = process.env.REDIS_URL;
@@ -107,6 +108,7 @@ describe.runIf(config)('perfis e stacks com MongoDB e Redis locais', () => {
   });
 
   afterAll(async () => {
+    if (app) await app.get(SeguidoresService).onModuleDestroy();
     if (inspector?.isReady) {
       const sessionKeys = await inspector.keys(`${config!.sessionPrefix}*`);
       if (sessionKeys.length) await inspector.del(sessionKeys);
@@ -296,11 +298,12 @@ describe.runIf(config)('perfis e stacks com MongoDB e Redis locais', () => {
     const publicBob = await request(app.getHttpServer()).get(`/usuarios/${bobUsername}`).expect(200);
     expect(publicBob.body.data).toMatchObject({ id: bobId, biografia: 'Perfil público' });
     expect(publicBob.body.data.stacks.map((item: { id: string }) => item.id)).toEqual(bobStack);
-    for (const field of ['email', 'senha_hash', 'papeis', 'status', 'contadores']) {
+    expect(publicBob.body.data.contadores).toEqual({ seguidores: 0, seguindo: 0 });
+    for (const field of ['email', 'senha_hash', 'papeis', 'status']) {
       expect(publicBob.body.data).not.toHaveProperty(field);
     }
     const privateAlice = await request(app.getHttpServer()).get(`/usuarios/${aliceUsername}`).set(auth(bobToken)).expect(200);
-    expect(privateAlice.body.data).toEqual({ id: aliceId, nome: 'Ana Atualizada', username: aliceUsername, avatarUrl: null, visibilidadePerfil: 'privado' });
+    expect(privateAlice.body.data).toEqual({ id: aliceId, nome: 'Ana Atualizada', username: aliceUsername, avatarUrl: null, visibilidadePerfil: 'privado', relacao: { enviada: 'nenhuma', recebida: 'nenhuma' } });
     const ownPublic = await request(app.getHttpServer()).get(`/usuarios/${aliceUsername}`).set(auth(aliceToken)).expect(200);
     expect(ownPublic.body.data.stacks).toHaveLength(20);
     expect(ownPublic.body.data).not.toHaveProperty('email');

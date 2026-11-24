@@ -14,6 +14,7 @@ import { PublicacoesCacheClient } from '../src/publicacoes/publicacoes-cache.cli
 import { PublicacoesCacheService } from '../src/publicacoes/publicacoes-cache.service.js';
 import { MediaStorageService } from '../src/publicacoes/media-storage.service.js';
 import { Publicacao } from '../src/publicacoes/schemas/publicacao.schema.js';
+import { SeguidoresService } from '../src/usuarios/seguidores.service.js';
 
 const baseMongoUri = process.env.MONGODB_URI;
 const baseRedisUrl = process.env.REDIS_URL;
@@ -208,6 +209,7 @@ describe.runIf(config)(
     });
 
     afterAll(async () => {
+      if (app) await app.get(SeguidoresService).onModuleDestroy();
       if (connection?.db) {
         const uploads = await connection.db
           .collection('uploads_midias')

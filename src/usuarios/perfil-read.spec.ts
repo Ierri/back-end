@@ -4,6 +4,7 @@ import { ApiException } from '../common/http/api.exception.js';
 import { PerfilReadService } from './perfil-read.service.js';
 import type { Tecnologia } from './schemas/tecnologia.schema.js';
 import type { Usuario } from './schemas/usuario.schema.js';
+import type { SeguidoresService } from './seguidores.service.js';
 
 const ownerId = new Types.ObjectId();
 const firstStackId = new Types.ObjectId();
@@ -49,11 +50,16 @@ function setup(currentUser: unknown = user()) {
     { _id: firstStackId, nome: 'TypeScript', slug: 'typescript', categoria: 'Linguagem', icone_url: '/brand/typescript.svg', ativo: true },
   ]);
   const technologies = { find: vi.fn().mockReturnValue(techQuery) };
+  const followers = {
+    counts: vi.fn().mockResolvedValue({ seguidores: 0, seguindo: 0 }),
+    relationship: vi.fn().mockResolvedValue({ enviada: 'nenhuma', recebida: 'nenhuma' }),
+  };
   const service = new PerfilReadService(
     users as unknown as Model<Usuario>,
     technologies as unknown as Model<Tecnologia>,
+    followers as unknown as SeguidoresService,
   );
-  return { service, users, technologies, techQuery };
+  return { service, users, technologies, techQuery, followers };
 }
 
 describe('PerfilReadService', () => {
@@ -73,6 +79,7 @@ describe('PerfilReadService', () => {
         { id: firstStackId.toString(), nome: 'TypeScript', slug: 'typescript', categoria: 'Linguagem', iconeUrl: '/brand/typescript.svg' },
         { id: secondStackId.toString(), nome: 'React', slug: 'react', categoria: 'Frontend', iconeUrl: null },
       ],
+      contadores: { seguidores: 0, seguindo: 0 },
       criadoEm: new Date('2026-01-01T00:00:00Z'),
       atualizadoEm: new Date('2026-01-02T00:00:00Z'),
     });
@@ -80,7 +87,6 @@ describe('PerfilReadService', () => {
     expect(result).not.toHaveProperty('senha_hash');
     expect(result).not.toHaveProperty('status');
     expect(result).not.toHaveProperty('papeis');
-    expect(result).not.toHaveProperty('contadores');
   });
 
   it('keeps legacy users readable without social fields', async () => {
@@ -97,14 +103,14 @@ describe('PerfilReadService', () => {
     expect(result).toMatchObject({ id: ownerId.toString(), biografia: 'Biografia', stacks: expect.any(Array) });
     expect(result).not.toHaveProperty('email');
     expect(result).not.toHaveProperty('senha_hash');
-    expect(result).not.toHaveProperty('contadores');
+    expect(result).toHaveProperty('contadores', { seguidores: 0, seguindo: 0 });
     expect(result).not.toHaveProperty('stackIds');
   });
 
   it('limits a private profile for visitors and exposes it to its owner without email', async () => {
     const { service, technologies } = setup(user({ visibilidade_perfil: 'privado' }));
     const thirdParty = await service.findPublic('pessoa', new Types.ObjectId().toString());
-    expect(thirdParty).toEqual({ id: ownerId.toString(), nome: 'Pessoa', username: 'pessoa', avatarUrl: '/brand/avatar.png', visibilidadePerfil: 'privado' });
+    expect(thirdParty).toEqual({ id: ownerId.toString(), nome: 'Pessoa', username: 'pessoa', avatarUrl: '/brand/avatar.png', visibilidadePerfil: 'privado', relacao: { enviada: 'nenhuma', recebida: 'nenhuma' } });
     expect(technologies.find).not.toHaveBeenCalled();
     const owner = await service.findPublic('pessoa', ownerId.toString());
     expect(owner).toMatchObject({ biografia: 'Biografia', stacks: expect.any(Array) });

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import type { Model } from 'mongoose';
@@ -6,6 +6,7 @@ import { ApiException } from '../common/http/api.exception.js';
 import { Tecnologia } from './schemas/tecnologia.schema.js';
 import { Usuario } from './schemas/usuario.schema.js';
 import type { UsuarioDocument } from './schemas/usuario.schema.js';
+import { SeguidoresService } from './seguidores.service.js';
 
 @Injectable()
 export class PerfilReadService {
@@ -13,12 +14,16 @@ export class PerfilReadService {
     @InjectModel(Usuario.name) private readonly usuarios: Model<Usuario>,
     @InjectModel(Tecnologia.name)
     private readonly tecnologias: Model<Tecnologia>,
+    @Inject(SeguidoresService) private readonly seguidores: SeguidoresService,
   ) {}
 
   async findSelf(userId: string) {
     const user = await this.usuarios.findById(userId).exec();
     if (!user) throw new ApiException('USER_NOT_FOUND');
-    const { stackIds, stacks } = await this.readStacks(user);
+    const [{ stackIds, stacks }, contadores] = await Promise.all([
+      this.readStacks(user),
+      this.seguidores.counts(userId),
+    ]);
     return {
       id: user._id.toString(),
       nome: user.nome,
@@ -29,6 +34,7 @@ export class PerfilReadService {
       visibilidadePerfil: user.visibilidade_perfil ?? 'publico',
       stackIds,
       stacks,
+      contadores,
       criadoEm: user.criado_em ?? null,
       atualizadoEm: user.atualizado_em ?? null,
     };
@@ -48,11 +54,17 @@ export class PerfilReadService {
       avatarUrl: user.avatar_url ?? null,
       visibilidadePerfil: user.visibilidade_perfil ?? 'publico',
     };
+    const relacao = viewerId
+      ? await this.seguidores.relationship(viewerId, base.id)
+      : undefined;
     if (base.visibilidadePerfil === 'privado' && viewerId !== base.id) {
-      return base;
+      return { ...base, ...(relacao ? { relacao } : {}) };
     }
-    const { stacks } = await this.readStacks(user);
-    return { ...base, biografia: user.biografia ?? null, stacks };
+    const [{ stacks }, contadores] = await Promise.all([
+      this.readStacks(user),
+      this.seguidores.counts(base.id),
+    ]);
+    return { ...base, biografia: user.biografia ?? null, stacks, contadores, ...(relacao ? { relacao } : {}) };
   }
 
   private async readStacks(user: UsuarioDocument) {

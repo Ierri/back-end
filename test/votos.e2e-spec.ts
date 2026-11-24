@@ -15,6 +15,7 @@ import { PublicacoesCacheClient } from '../src/publicacoes/publicacoes-cache.cli
 import { PublicacoesCacheService } from '../src/publicacoes/publicacoes-cache.service.js';
 import { VotosService } from '../src/publicacoes/votos.service.js';
 import type { Voto } from '../src/publicacoes/schemas/voto.schema.js';
+import { SeguidoresService } from '../src/usuarios/seguidores.service.js';
 
 const runId = randomBytes(8).toString('hex');
 const mongoBase = process.env.MONGODB_URI;
@@ -198,6 +199,7 @@ describe.runIf(config)('votos com MongoDB, Redis e MinIO locais', () => {
   });
 
   afterAll(async () => {
+    if (app) await app.get(SeguidoresService).onModuleDestroy();
     if (connection?.db) {
       const uploads = await connection.db.collection('uploads_midias').find({}, { projection: { chave_storage: 1 } }).toArray();
       for (const upload of uploads) await storage.remove(upload.chave_storage).catch(() => undefined);

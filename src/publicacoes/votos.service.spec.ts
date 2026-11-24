@@ -363,7 +363,7 @@ describe('votos: execução da query pelo Mongoose', () => {
     };
     try {
       const service = new VotosService(
-        voteModel as Model<Voto>,
+        voteModel as unknown as Model<Voto>,
         {} as Model<Publicacao>,
         {} as Model<Usuario>,
         {} as PublicacoesCacheService,
