@@ -14,6 +14,7 @@ import { configureHttp } from '../src/common/http/configure-http.js';
 import { MediaStorageService } from '../src/publicacoes/media-storage.service.js';
 import { PublicacoesCacheClient } from '../src/publicacoes/publicacoes-cache.client.js';
 import type { Publicacao } from '../src/publicacoes/schemas/publicacao.schema.js';
+import { SeguidoresService } from '../src/usuarios/seguidores.service.js';
 
 const runId = randomBytes(8).toString('hex');
 const mongoBase = process.env.MONGODB_URI;
@@ -86,6 +87,7 @@ describe.runIf(config)('comentários com MongoDB, Redis e MinIO locais', () => {
   });
 
   afterAll(async () => {
+    if (app) await app.get(SeguidoresService).onModuleDestroy();
     if (connection?.db) {
       const uploads = await connection.db.collection('uploads_midias').find({}, { projection: { chave_storage: 1 } }).toArray();
       for (const upload of uploads) await storage.remove(upload.chave_storage).catch(() => undefined);

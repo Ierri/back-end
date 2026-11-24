@@ -10,6 +10,18 @@ export const API_ERRORS = {
     status: HttpStatus.NOT_FOUND,
     message: 'Usuário não encontrado.',
   },
+  SEGUIDOR_SELF: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'Não é possível seguir a si mesmo.',
+  },
+  SEGUIDOR_REQUEST_NOT_FOUND: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'Solicitação não encontrada.',
+  },
+  SEGUIDOR_WRITE_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message: 'Não foi possível atualizar a relação agora. Tente novamente mais tarde.',
+  },
   CHECK_EMAIL_RATE_LIMITED: {
     status: HttpStatus.TOO_MANY_REQUESTS,
     message: 'Muitas consultas. Tente novamente mais tarde.',

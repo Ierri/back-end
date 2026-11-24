@@ -27,6 +27,7 @@ export type SeguidorDocument = HydratedDocument<Seguidor>;
 export const SeguidorSchema = SchemaFactory.createForClass(Seguidor);
 SeguidorSchema.index({ seguidor_id: 1, seguido_id: 1 }, { unique: true });
 SeguidorSchema.index({ seguido_id: 1, status: 1, solicitado_em: -1, _id: -1 });
+SeguidorSchema.index({ seguido_id: 1, status: 1, atualizado_em: -1, _id: -1 });
 SeguidorSchema.index({ seguidor_id: 1, status: 1, atualizado_em: -1, _id: -1 });
 SeguidorSchema.pre('validate', function () {
   if (this.seguidor_id?.equals(this.seguido_id)) {
