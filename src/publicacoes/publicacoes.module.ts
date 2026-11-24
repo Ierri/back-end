@@ -29,6 +29,9 @@ import { Voto, VotoSchema } from './schemas/voto.schema.js';
 import { VotosController } from './votos.controller.js';
 import { VotosService } from './votos.service.js';
 import { PublicacaoSalva, PublicacaoSalvaSchema } from './schemas/publicacao-salva.schema.js';
+import { SalvosController } from './salvos.controller.js';
+import { SalvosCursor } from './salvos.cursor.js';
+import { SalvosService } from './salvos.service.js';
 
 @Module({
   imports: [
@@ -42,7 +45,7 @@ import { PublicacaoSalva, PublicacaoSalvaSchema } from './schemas/publicacao-sal
       { name: PublicacaoSalva.name, schema: PublicacaoSalvaSchema },
     ]),
   ],
-  controllers: [PublicacoesController, MediaController, VotosController],
+  controllers: [PublicacoesController, MediaController, VotosController, SalvosController],
   providers: [
     PublicacoesService,
     PublicacaoAccessService,
@@ -52,6 +55,8 @@ import { PublicacaoSalva, PublicacaoSalvaSchema } from './schemas/publicacao-sal
     OptionalAuthGuard,
     RequiredAuthGuard,
     VotosService,
+    SalvosService,
+    SalvosCursor,
     MediaStorageService,
     VideoProbeService,
     MediaInspectionService,

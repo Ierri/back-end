@@ -198,7 +198,9 @@ export class PublicacoesService {
         (post) =>
           post.visibilidade === 'publico' &&
           !post.votos_projecao_pendente &&
-          !post.votos_operacoes_pendentes?.length,
+          !post.votos_operacoes_pendentes?.length &&
+          !post.salvamentos_projecao_pendente &&
+          !post.salvamentos_operacoes_pendentes?.length,
       ),
     };
   }
@@ -333,7 +335,9 @@ export class PublicacoesService {
       viewer: this.toResponse(publication, author, viewerId),
       cacheable:
         !publication.votos_projecao_pendente &&
-        !publication.votos_operacoes_pendentes?.length,
+        !publication.votos_operacoes_pendentes?.length &&
+        !publication.salvamentos_projecao_pendente &&
+        !publication.salvamentos_operacoes_pendentes?.length,
     };
   }
 
@@ -392,7 +396,7 @@ export class PublicacoesService {
     const ids = cached.map((item) => new Types.ObjectId(item.id));
     const stored = await this.publicacoes
       .find({ _id: { $in: ids } })
-      .select('_id status visibilidade autor_id publicada_em atualizada_em votos_projecao_pendente votos_operacoes_pendentes')
+      .select('_id status visibilidade autor_id publicada_em atualizada_em contadores.salvamentos votos_projecao_pendente votos_operacoes_pendentes salvamentos_projecao_pendente salvamentos_operacoes_pendentes')
       .lean()
       .exec();
     if (stored.length !== cached.length) return null;
@@ -405,6 +409,9 @@ export class PublicacoesService {
         current.visibilidade !== 'publico' ||
         Boolean(current.votos_projecao_pendente) ||
         Boolean(current.votos_operacoes_pendentes?.length) ||
+        Boolean(current.salvamentos_projecao_pendente) ||
+        Boolean(current.salvamentos_operacoes_pendentes?.length) ||
+        (current.contadores?.salvamentos ?? 0) !== item.contadores.salvamentos ||
         current.autor_id.toString() !== item.autor.id ||
         (authorId && current.autor_id.toString() !== authorId) ||
         current.publicada_em?.getTime() !== item.publicadaEm.getTime() ||
@@ -500,7 +507,7 @@ export class PublicacoesService {
     };
   }
 
-  private toResponse(
+  toResponse(
     publication: PublicacaoDocument,
     author: UsuarioDocument,
     viewerId?: string,

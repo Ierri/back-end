@@ -78,6 +78,18 @@ export class VotoOperacaoPendente {
 export const VotoOperacaoPendenteSchema =
   SchemaFactory.createForClass(VotoOperacaoPendente);
 
+@Schema({ _id: false })
+export class SalvamentoOperacaoPendente {
+  @Prop({ type: String, required: true })
+  token: string;
+
+  @Prop({ type: Date, required: true })
+  expira_em: Date;
+}
+
+export const SalvamentoOperacaoPendenteSchema =
+  SchemaFactory.createForClass(SalvamentoOperacaoPendente);
+
 export function validPublicationMedia(midias: PublicacaoMidia[]): boolean {
   if (!Array.isArray(midias) || midias.length < 1 || midias.length > 10)
     return false;
@@ -199,6 +211,21 @@ export class Publicacao {
   @Prop({ type: Date, default: null })
   votos_auditoria_em: Date | null;
 
+  @Prop({ type: Number, default: 0, min: 0 })
+  salvamentos_revisao: number;
+
+  @Prop({ type: Boolean, default: false })
+  salvamentos_projecao_pendente: boolean;
+
+  @Prop({ type: [SalvamentoOperacaoPendenteSchema], default: [] })
+  salvamentos_operacoes_pendentes: SalvamentoOperacaoPendente[];
+
+  @Prop({ type: Date, default: () => new Date('9999-12-31T23:59:59.999Z') })
+  salvamentos_proxima_tentativa_em: Date;
+
+  @Prop({ type: Date, default: null })
+  salvamentos_auditoria_em: Date | null;
+
   @Prop({ type: Date, default: null })
   publicada_em: Date | null;
 
@@ -228,6 +255,8 @@ PublicacaoSchema.index({
 PublicacaoSchema.index({ autor_id: 1, status: 1, publicada_em: -1, _id: -1 });
 PublicacaoSchema.index({ votos_projecao_pendente: 1, votos_proxima_tentativa_em: 1, _id: 1 });
 PublicacaoSchema.index({ votos_auditoria_em: 1, _id: 1 });
+PublicacaoSchema.index({ salvamentos_projecao_pendente: 1, salvamentos_proxima_tentativa_em: 1, _id: 1 });
+PublicacaoSchema.index({ salvamentos_auditoria_em: 1, _id: 1 });
 PublicacaoSchema.index({
   autor_id: 1,
   status: 1,
