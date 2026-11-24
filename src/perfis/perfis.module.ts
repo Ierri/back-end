@@ -15,9 +15,10 @@ import { SeguidoresController } from '../usuarios/seguidores.controller.js';
 import { SeguidoresCursor } from '../usuarios/seguidores.cursor.js';
 import { SeguidoresService } from '../usuarios/seguidores.service.js';
 import { NotificationProducerModule } from '../notificacoes/notification-producer.module.js';
+import { AvatarModule } from '../usuarios/avatar.module.js';
 
 @Module({
-  imports: [AuthModule, UsuariosModule, NotificationProducerModule],
+  imports: [AuthModule, UsuariosModule, NotificationProducerModule, AvatarModule],
   controllers: [UsuariosController, TecnologiasController, AdminTecnologiasController, SeguidoresController],
   providers: [
     OptionalAuthGuard,

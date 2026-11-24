@@ -1,13 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
 import { ApiException } from '../common/http/api.exception.js';
 import type { UpdatePerfilDto } from './dto/perfil-update.dto.js';
 import { Usuario } from './schemas/usuario.schema.js';
 import type { UsuarioDocument } from './schemas/usuario.schema.js';
+import { AvatarService } from './avatar.service.js';
 
 @Injectable()
 export class PerfilUpdateService {
+  @Inject(AvatarService) private avatars?: AvatarService;
   constructor(@InjectModel(Usuario.name) private readonly usuarios: Model<Usuario>) {}
 
   async update(userId: string, dto: UpdatePerfilDto): Promise<UsuarioDocument> {
@@ -19,6 +21,8 @@ export class PerfilUpdateService {
     if (dto.visibilidadePerfil !== undefined) changes.visibilidade_perfil = dto.visibilidadePerfil;
 
     try {
+      if (dto.avatarUrl !== undefined && this.avatars)
+        return await this.avatars.updateProfile(userId, changes, dto.avatarUrl);
       const updated = await this.usuarios
         .findOneAndUpdate(
           { _id: userId, status: 'ativo' },

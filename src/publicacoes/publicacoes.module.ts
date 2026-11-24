@@ -69,6 +69,7 @@ import { NotificationProducerModule } from '../notificacoes/notification-produce
     MediaCleanupService,
     { provide: MEDIA_VERIFIER, useClass: MongoMediaVerifierService },
   ],
-  exports: [OptionalAuthGuard, RequiredAuthGuard, PublicacoesCacheService, PublicacaoAccessService],
+  exports: [OptionalAuthGuard, RequiredAuthGuard, PublicacoesCacheService, PublicacaoAccessService,
+    MediaStorageService, MediaInspectionService],
 })
 export class PublicacoesModule {}

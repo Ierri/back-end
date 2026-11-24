@@ -151,6 +151,7 @@ jobs:
             { file: 'admin-tecnologias.e2e-spec.ts', label: 'Administração de tecnologias', minimum: 8 },
             { file: 'notificacoes.e2e-spec.ts', label: 'Notificações', minimum: 13 },
             { file: 'moderacao.e2e-spec.ts', label: 'Denúncias e moderação', minimum: 13 },
+            { file: 'avatar.e2e-spec.ts', label: 'Avatar personalizado', minimum: 11 },
           ]) {
             const suite = report.testResults.find(({ name }) => {
               const path = name.replaceAll('\\', '/');

@@ -154,6 +154,18 @@ export const API_ERRORS = {
     status: HttpStatus.NOT_FOUND,
     message: 'Mídia não encontrada.',
   },
+  AVATAR_INVALID: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'Imagem de avatar inválida.',
+  },
+  AVATAR_NOT_FOUND: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'Avatar não encontrado.',
+  },
+  AVATAR_CONFLICT: {
+    status: HttpStatus.CONFLICT,
+    message: 'O avatar foi alterado. Tente novamente.',
+  },
   DENUNCIA_ALVO_NAO_ENCONTRADO: {
     status: HttpStatus.NOT_FOUND,
     message: 'Alvo da denúncia não encontrado.',
