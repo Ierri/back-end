@@ -22,6 +22,14 @@ export class MediaStorageService implements OnModuleDestroy {
   constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
 
   publicUrl(reference: string) {
+    return `${this.publicBase()}/publicacoes/midias/${reference}`;
+  }
+
+  avatarUrl(userId: string, reference: string) {
+    return `${this.publicBase()}/usuarios/${userId}/avatar/${reference}`;
+  }
+
+  private publicBase() {
     const configured = this.config.get<string>('MEDIA_PUBLIC_BASE_URL')?.trim();
     if (!configured) throw new ApiException('MEDIA_STORAGE_UNAVAILABLE');
     try {
@@ -37,7 +45,7 @@ export class MediaStorageService implements OnModuleDestroy {
       ) {
         throw new Error('Invalid public URL');
       }
-      return `${url.toString().replace(/\/$/, '')}/publicacoes/midias/${reference}`;
+      return url.toString().replace(/\/$/, '');
     } catch {
       throw new ApiException('MEDIA_STORAGE_UNAVAILABLE');
     }

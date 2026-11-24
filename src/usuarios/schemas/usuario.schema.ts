@@ -21,6 +21,32 @@ export class UsuarioContadores {
 
 const UsuarioContadoresSchema = SchemaFactory.createForClass(UsuarioContadores);
 
+@Schema({ _id: false })
+export class AvatarAtual {
+  @Prop({ type: String, required: true })
+  referencia: string;
+
+  @Prop({ type: String, required: true })
+  chave_storage: string;
+
+  @Prop({ type: String, required: true, enum: ['image/jpeg', 'image/png', 'image/webp'] })
+  mime_type: string;
+
+  @Prop({ type: Number, required: true, min: 1, max: 5_000_000 })
+  tamanho_bytes: number;
+
+  @Prop({ type: Number, required: true, min: 128, max: 4096 })
+  largura: number;
+
+  @Prop({ type: Number, required: true, min: 128, max: 4096 })
+  altura: number;
+
+  @Prop({ type: String, required: true })
+  sha256: string;
+}
+
+const AvatarAtualSchema = SchemaFactory.createForClass(AvatarAtual);
+
 @Schema({
   collection: 'usuarios',
   timestamps: { createdAt: 'criado_em', updatedAt: 'atualizado_em' },
@@ -44,6 +70,12 @@ export class Usuario {
 
   @Prop({ type: String })
   avatar_url?: string;
+
+  @Prop({ type: AvatarAtualSchema, default: null })
+  avatar_atual: AvatarAtual | null;
+
+  @Prop({ type: Number, default: 0, min: 0 })
+  avatar_revisao: number;
 
   @Prop({
     type: [MongooseSchema.Types.ObjectId],

@@ -60,6 +60,9 @@ describe('MediaStorageService', () => {
     expect(storage.publicUrl('opaque-reference')).toBe(
       'http://localhost:3001/publicacoes/midias/opaque-reference',
     );
+    expect(storage.avatarUrl('user-id', 'avatar-reference')).toBe(
+      'http://localhost:3001/usuarios/user-id/avatar/avatar-reference',
+    );
     storage.onModuleDestroy();
     expect(destroy).toHaveBeenCalledOnce();
   });
