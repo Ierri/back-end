@@ -6,6 +6,7 @@ import type { Model } from 'mongoose';
 import { ApiException } from '../common/http/api.exception.js';
 import { Usuario } from '../usuarios/schemas/usuario.schema.js';
 import type { UsuarioDocument } from '../usuarios/schemas/usuario.schema.js';
+import { CreatorStatsService } from '../usuarios/creator-stats.service.js';
 import type {
   CreatePublicacaoDto,
   ListPublicacoesDto,
@@ -40,6 +41,7 @@ type AuthorSnapshot = {
 
 @Injectable()
 export class PublicacoesService {
+  @Inject(CreatorStatsService) private creatorStats?: CreatorStatsService;
   constructor(
     @InjectModel(Publicacao.name)
     private readonly publicacoes: Model<Publicacao>,
@@ -271,6 +273,7 @@ export class PublicacoesService {
         .finalizeForPublication(publicationId.toString(), body.midias)
         .catch(() => undefined);
       await this.cache.invalidate(publicationId.toString(), authorId);
+      await this.creatorStats?.refresh(authorId).catch(() => undefined);
       return this.toResponse(published, author, authorId);
     } catch (error) {
       let safeToRelease = !writeStarted;
@@ -464,6 +467,8 @@ export class PublicacoesService {
       .exec();
     if (!publication) throw new ApiException('PUBLICACAO_NOT_FOUND');
     await this.cache.invalidate(id, authorId);
+    if (body.visibilidade !== undefined)
+      await this.creatorStats?.refresh(authorId).catch(() => undefined);
     const author = await this.usuarios
       .findById(authorId)
       .select('nome username biografia avatar_url visibilidade_perfil')
@@ -486,6 +491,7 @@ export class PublicacoesService {
       .exec();
     if (!publication) throw new ApiException('PUBLICACAO_NOT_FOUND');
     await this.cache.invalidate(id, authorId);
+    await this.creatorStats?.refresh(authorId).catch(() => undefined);
     return null;
   }
 
