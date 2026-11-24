@@ -88,6 +88,14 @@ export const API_ERRORS = {
     status: HttpStatus.SERVICE_UNAVAILABLE,
     message: 'Não foi possível salvar o voto agora. Tente novamente mais tarde.',
   },
+  SALVO_OPERATION_PENDING: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message: 'A operação de salvamento ainda não foi concluída. Tente novamente mais tarde.',
+  },
+  SALVO_WRITE_UNAVAILABLE: {
+    status: HttpStatus.SERVICE_UNAVAILABLE,
+    message: 'Não foi possível atualizar os salvos agora. Tente novamente mais tarde.',
+  },
   COMENTARIO_NOT_FOUND: {
     status: HttpStatus.NOT_FOUND,
     message: 'Comentário não encontrado.',
