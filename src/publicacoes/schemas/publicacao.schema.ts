@@ -1,11 +1,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Types } from 'mongoose';
+import { Schema as MongooseSchema, Types } from 'mongoose';
 import type { HydratedDocument } from 'mongoose';
 import { MAX_MEDIA_SIZE_BYTES } from '../media-verifier.js';
 
 @Schema()
 export class PublicacaoMidia {
-  @Prop({ type: Types.ObjectId, default: () => new Types.ObjectId() })
+  @Prop({ type: MongooseSchema.Types.ObjectId, default: () => new Types.ObjectId() })
   _id: Types.ObjectId;
 
   @Prop({ type: String, required: true, enum: ['imagem', 'video'] })
@@ -62,6 +62,21 @@ export class PublicacaoContadores {
 
 export const PublicacaoContadoresSchema =
   SchemaFactory.createForClass(PublicacaoContadores);
+
+@Schema({ _id: false })
+export class VotoOperacaoPendente {
+  @Prop({ type: MongooseSchema.Types.ObjectId, required: true })
+  usuario_id: Types.ObjectId;
+
+  @Prop({ type: String, required: true })
+  token: string;
+
+  @Prop({ type: Date, required: true })
+  expira_em: Date;
+}
+
+export const VotoOperacaoPendenteSchema =
+  SchemaFactory.createForClass(VotoOperacaoPendente);
 
 export function validPublicationMedia(midias: PublicacaoMidia[]): boolean {
   if (!Array.isArray(midias) || midias.length < 1 || midias.length > 10)
@@ -133,7 +148,7 @@ export class Publicacao {
   slug: string;
 
   @Prop({
-    type: Types.ObjectId,
+    type: MongooseSchema.Types.ObjectId,
     ref: 'Usuario',
     required: true,
     immutable: true,
@@ -169,6 +184,21 @@ export class Publicacao {
   @Prop({ type: [String], default: [] })
   comentarios_operacoes_pendentes: string[];
 
+  @Prop({ type: Number, default: 0, min: 0 })
+  votos_revisao: number;
+
+  @Prop({ type: [VotoOperacaoPendenteSchema], default: [] })
+  votos_operacoes_pendentes: VotoOperacaoPendente[];
+
+  @Prop({ type: Boolean, default: false })
+  votos_projecao_pendente: boolean;
+
+  @Prop({ type: Date, default: () => new Date('9999-12-31T23:59:59.999Z') })
+  votos_proxima_tentativa_em: Date;
+
+  @Prop({ type: Date, default: null })
+  votos_auditoria_em: Date | null;
+
   @Prop({ type: Date, default: null })
   publicada_em: Date | null;
 
@@ -196,6 +226,8 @@ PublicacaoSchema.index({
   _id: -1,
 });
 PublicacaoSchema.index({ autor_id: 1, status: 1, publicada_em: -1, _id: -1 });
+PublicacaoSchema.index({ votos_projecao_pendente: 1, votos_proxima_tentativa_em: 1, _id: 1 });
+PublicacaoSchema.index({ votos_auditoria_em: 1, _id: 1 });
 PublicacaoSchema.index({
   autor_id: 1,
   status: 1,

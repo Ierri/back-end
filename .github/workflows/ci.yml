@@ -133,22 +133,29 @@ jobs:
       - name: Testes E2E com MongoDB, Redis e MinIO
         run: bun run test:e2e --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/ierri-e2e.json"
 
-      - name: Confirmar execução dos testes E2E de comentários
+      - name: Confirmar execução dos testes E2E obrigatórios
         run: |
           node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
           const report = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/ierri-e2e.json`, 'utf8'));
-          const suite = report.testResults.find(({ name }) => {
-            const path = name.replaceAll('\\', '/');
-            return path === 'test/comentarios.e2e-spec.ts' || path.endsWith('/test/comentarios.e2e-spec.ts');
-          });
-          const tests = suite?.assertionResults ?? [];
-          const passed = tests.filter(({ status }) => status === 'passed').length;
-          if (tests.length < 12 || passed !== tests.length) {
-            console.error(`Comentários E2E: ${passed}/${tests.length} testes aprovados; a suíte foi ignorada ou está incompleta.`);
-            process.exit(1);
+          for (const { file, label, minimum } of [
+            { file: 'comentarios.e2e-spec.ts', label: 'Comentários', minimum: 12 },
+            { file: 'modelagem.e2e-spec.ts', label: 'Modelagem', minimum: 5 },
+            { file: 'perfis.e2e-spec.ts', label: 'Perfis e stacks', minimum: 12 },
+            { file: 'votos.e2e-spec.ts', label: 'Votos', minimum: 27 },
+          ]) {
+            const suite = report.testResults.find(({ name }) => {
+              const path = name.replaceAll('\\', '/');
+              return path === `test/${file}` || path.endsWith(`/test/${file}`);
+            });
+            const tests = suite?.assertionResults ?? [];
+            const passed = tests.filter(({ status }) => status === 'passed').length;
+            if (tests.length < minimum || passed !== tests.length) {
+              console.error(`${label} E2E: ${passed}/${tests.length} testes aprovados; a suíte foi ignorada ou está incompleta.`);
+              process.exit(1);
+            }
+            console.log(`${label} E2E: ${passed} testes executados e aprovados.`);
           }
-          console.log(`Comentários E2E: ${passed} testes executados e aprovados.`);
           NODE
 
       - name: Build de produção

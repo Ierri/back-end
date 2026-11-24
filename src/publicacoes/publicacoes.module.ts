@@ -23,6 +23,10 @@ import {
   UploadMediaSchema,
 } from './schemas/upload-media.schema.js';
 import { VideoProbeService } from './video-probe.service.js';
+import { Voto, VotoSchema } from './schemas/voto.schema.js';
+import { VotosController } from './votos.controller.js';
+import { VotosService } from './votos.service.js';
+import { PublicacaoSalva, PublicacaoSalvaSchema } from './schemas/publicacao-salva.schema.js';
 
 @Module({
   imports: [
@@ -31,9 +35,11 @@ import { VideoProbeService } from './video-probe.service.js';
       { name: Publicacao.name, schema: PublicacaoSchema },
       { name: Usuario.name, schema: UsuarioSchema },
       { name: UploadMedia.name, schema: UploadMediaSchema },
+      { name: Voto.name, schema: VotoSchema },
+      { name: PublicacaoSalva.name, schema: PublicacaoSalvaSchema },
     ]),
   ],
-  controllers: [PublicacoesController, MediaController],
+  controllers: [PublicacoesController, MediaController, VotosController],
   providers: [
     PublicacoesService,
     PublicacoesCacheClient,
@@ -41,6 +47,7 @@ import { VideoProbeService } from './video-probe.service.js';
     PublicacoesCursor,
     OptionalAuthGuard,
     RequiredAuthGuard,
+    VotosService,
     MediaStorageService,
     VideoProbeService,
     MediaInspectionService,

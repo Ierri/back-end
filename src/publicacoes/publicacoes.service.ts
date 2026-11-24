@@ -28,6 +28,15 @@ import type {
   PublicacaoMidia,
 } from './schemas/publicacao.schema.js';
 
+type AuthorSnapshot = {
+  _id: Types.ObjectId;
+  nome: string;
+  username: string;
+  biografia?: string | null;
+  avatar_url?: string | null;
+  visibilidade_perfil?: 'publico' | 'privado';
+};
+
 @Injectable()
 export class PublicacoesService {
   constructor(
@@ -57,33 +66,35 @@ export class PublicacoesService {
     );
     if (address) {
       const cached = await this.cache.readPage(address);
-      if (
-        cached &&
-        (await this.cachedPageCurrent(
-          cached,
-          query.limite,
-          authorId,
-          position,
-        )) &&
-        (await this.cache.isCurrent(address))
-      ) {
+      const currentAuthors = cached
+        ? await this.cachedPageCurrent(cached, query.limite, authorId, position)
+        : null;
+      if (cached && currentAuthors && (await this.cache.isCurrent(address))) {
         this.cache.countHit();
-        return cached;
+        return {
+          ...cached,
+          items: cached.items.map((item) =>
+            this.forViewer(item, viewerId, currentAuthors),
+          ),
+        };
       }
       if (cached) this.cache.countStaleMiss();
-      return this.cache.coalesce(address.key, async () => {
+      const load = async () => {
         this.cache.countMongoAfterMiss();
         const fresh = await this.loadList(
           query,
           authorId,
           scope.owner,
           position,
+          viewerId,
         );
-        await this.cache.writePage(address, fresh);
-        return fresh;
-      });
+        if (fresh.cacheable) await this.cache.writePage(address, fresh.shared);
+        return fresh.viewer;
+      };
+      return viewerId ? load() : this.cache.coalesce(address.key, load);
     }
-    return this.loadList(query, authorId, scope.owner, position);
+    return (await this.loadList(query, authorId, scope.owner, position, viewerId))
+      .viewer;
   }
 
   private async loadList(
@@ -91,6 +102,7 @@ export class PublicacoesService {
     authorId: string | null,
     owner: boolean,
     position: { publishedAt: Date; id: Types.ObjectId } | null,
+    viewerId?: string,
   ) {
     const filter = {
       status: 'publicada' as const,
@@ -118,19 +130,25 @@ export class PublicacoesService {
     const authors = authorIds.length
       ? await this.usuarios
           .find({ _id: { $in: authorIds } })
-          .select('nome username biografia avatar_url')
+          .select('nome username biografia avatar_url visibilidade_perfil')
           .exec()
       : [];
     const byId = new Map(
       authors.map((author) => [author._id.toString(), author]),
     );
-    const items = page.flatMap((post) => {
+    const sharedItems = page.flatMap((post) => {
       const author = byId.get(post.autor_id.toString());
       return author ? [this.toResponse(post, author)] : [];
     });
+    const viewerItems = viewerId
+      ? page.flatMap((post) => {
+          const author = byId.get(post.autor_id.toString());
+          return author ? [this.toResponse(post, author, viewerId)] : [];
+        })
+      : sharedItems;
     const last = page.at(-1);
-    return {
-      items,
+    const shared = {
+      items: sharedItems,
       nextCursor:
         hasMore && last
           ? this.cursor.encode(
@@ -140,12 +158,21 @@ export class PublicacoesService {
           : null,
       hasMore,
     };
+    return {
+      shared,
+      viewer: viewerId ? { ...shared, items: viewerItems } : shared,
+      cacheable: page.every(
+        (post) =>
+          !post.votos_projecao_pendente &&
+          !post.votos_operacoes_pendentes?.length,
+      ),
+    };
   }
 
   async create(authorId: string, body: CreatePublicacaoDto) {
     const author = await this.usuarios
       .findById(authorId)
-      .select('nome username biografia avatar_url')
+      .select('nome username biografia avatar_url visibilidade_perfil')
       .exec();
     if (!author) throw new ApiException('AUTH_REQUIRED');
 
@@ -208,7 +235,7 @@ export class PublicacoesService {
         .finalizeForPublication(publicationId.toString(), body.midias)
         .catch(() => undefined);
       await this.cache.invalidate(publicationId.toString(), authorId);
-      return this.toResponse(published, author);
+      return this.toResponse(published, author, authorId);
     } catch (error) {
       let safeToRelease = !writeStarted;
       if (postPersisted) {
@@ -231,26 +258,29 @@ export class PublicacoesService {
     const address = await this.cache.postAddress(id);
     if (address) {
       const cached = await this.cache.readPost(address);
+      const currentAuthors =
+        cached && cached.id.toLowerCase() === id.toLowerCase()
+          ? await this.cachedPostsCurrent([cached], null)
+          : null;
       if (
         cached &&
-        cached.id.toLowerCase() === id.toLowerCase() &&
-        (await this.cachedPostsCurrent([cached], null)) &&
+        currentAuthors &&
         (await this.cache.isCurrent(address))
       ) {
         this.cache.countHit();
-        return cached;
+        return this.forViewer(cached, viewerId, currentAuthors);
       }
       if (cached) this.cache.countStaleMiss();
       const load = async () => {
         this.cache.countMongoAfterMiss();
         const fresh = await this.loadById(id, viewerId);
-        if (fresh.visibilidade === 'publico')
-          await this.cache.writePost(address, fresh);
-        return fresh;
+        if (fresh.cacheable && fresh.shared.visibilidade === 'publico')
+          await this.cache.writePost(address, fresh.shared);
+        return fresh.viewer;
       };
       return viewerId ? load() : this.cache.coalesce(address.key, load);
     }
-    return this.loadById(id, viewerId);
+    return (await this.loadById(id, viewerId)).viewer;
   }
 
   private async loadById(id: string, viewerId?: string) {
@@ -266,10 +296,16 @@ export class PublicacoesService {
     if (!publication) throw new ApiException('PUBLICACAO_NOT_FOUND');
     const author = await this.usuarios
       .findById(publication.autor_id)
-      .select('nome username biografia avatar_url')
+      .select('nome username biografia avatar_url visibilidade_perfil')
       .exec();
     if (!author) throw new ApiException('PUBLICACAO_NOT_FOUND');
-    return this.toResponse(publication, author);
+    return {
+      shared: this.toResponse(publication, author),
+      viewer: this.toResponse(publication, author, viewerId),
+      cacheable:
+        !publication.votos_projecao_pendente &&
+        !publication.votos_operacoes_pendentes?.length,
+    };
   }
 
   private async cachedPageCurrent(
@@ -283,22 +319,22 @@ export class PublicacoesService {
       cached.hasMore !== (cached.nextCursor !== null) ||
       (cached.hasMore && cached.items.length === 0)
     )
-      return false;
+      return null;
     const compare = (left: CachedPublicacao, right: CachedPublicacao) =>
       left.publicadaEm.getTime() - right.publicadaEm.getTime() ||
       left.id.localeCompare(right.id);
     for (let index = 0; index < cached.items.length; index++) {
       const item = cached.items[index];
-      if (authorId && item.autor.id.toLowerCase() !== authorId) return false;
+      if (authorId && item.autor.id.toLowerCase() !== authorId) return null;
       if (index > 0 && compare(cached.items[index - 1], item) <= 0)
-        return false;
+        return null;
       if (
         position &&
         (item.publicadaEm.getTime() > position.publishedAt.getTime() ||
           (item.publicadaEm.getTime() === position.publishedAt.getTime() &&
             item.id >= position.id.toString()))
       )
-        return false;
+        return null;
     }
     if (cached.nextCursor) {
       try {
@@ -311,9 +347,9 @@ export class PublicacoesService {
           decoded.id.toString() !== last.id ||
           decoded.publishedAt.getTime() !== last.publicadaEm.getTime()
         )
-          return false;
+          return null;
       } catch {
-        return false;
+        return null;
       }
     }
     return this.cachedPostsCurrent(cached.items, authorId);
@@ -323,14 +359,14 @@ export class PublicacoesService {
     cached: CachedPublicacao[],
     authorId: string | null,
   ) {
-    if (!cached.length) return true;
+    if (!cached.length) return new Map<string, AuthorSnapshot>();
     const ids = cached.map((item) => new Types.ObjectId(item.id));
     const stored = await this.publicacoes
       .find({ _id: { $in: ids } })
-      .select('_id status visibilidade autor_id publicada_em atualizada_em')
+      .select('_id status visibilidade autor_id publicada_em atualizada_em votos_projecao_pendente votos_operacoes_pendentes')
       .lean()
       .exec();
-    if (stored.length !== cached.length) return false;
+    if (stored.length !== cached.length) return null;
     const byId = new Map(stored.map((item) => [item._id.toString(), item]));
     for (const item of cached) {
       const current = byId.get(item.id);
@@ -338,32 +374,37 @@ export class PublicacoesService {
         !current ||
         current.status !== 'publicada' ||
         current.visibilidade !== 'publico' ||
+        Boolean(current.votos_projecao_pendente) ||
+        Boolean(current.votos_operacoes_pendentes?.length) ||
         current.autor_id.toString() !== item.autor.id ||
         (authorId && current.autor_id.toString() !== authorId) ||
         current.publicada_em?.getTime() !== item.publicadaEm.getTime() ||
         current.atualizada_em.getTime() !== item.atualizadaEm.getTime()
       )
-        return false;
+        return null;
     }
     const authorIds = [...new Set(cached.map((item) => item.autor.id))];
     const authors = await this.usuarios
       .find({ _id: { $in: authorIds } })
-      .select('nome username biografia avatar_url')
+      .select('nome username biografia avatar_url visibilidade_perfil')
       .lean()
       .exec();
-    if (authors.length !== authorIds.length) return false;
+    if (authors.length !== authorIds.length) return null;
     const byAuthor = new Map(
       authors.map((author) => [author._id.toString(), author]),
     );
-    return cached.every((item) => {
+    const valid = cached.every((item) => {
       const author = byAuthor.get(item.autor.id);
       return (
         author?.nome === item.autor.nome &&
         author.username === item.autor.username &&
-        (author.biografia ?? null) === item.autor.biografia &&
+        (author.visibilidade_perfil === 'privado'
+          ? null
+          : (author.biografia ?? null)) === item.autor.biografia &&
         (author.avatar_url ?? null) === item.autor.avatarUrl
       );
     });
+    return valid ? byAuthor : null;
   }
 
   async update(id: string, authorId: string, body: UpdatePublicacaoDto) {
@@ -389,10 +430,10 @@ export class PublicacoesService {
     await this.cache.invalidate(id, authorId);
     const author = await this.usuarios
       .findById(authorId)
-      .select('nome username biografia avatar_url')
+      .select('nome username biografia avatar_url visibilidade_perfil')
       .exec();
     if (!author) throw new ApiException('PUBLICACAO_NOT_FOUND');
-    return this.toResponse(publication, author);
+    return this.toResponse(publication, author, authorId);
   }
 
   async remove(id: string, authorId: string) {
@@ -412,7 +453,29 @@ export class PublicacoesService {
     return null;
   }
 
-  private toResponse(publication: PublicacaoDocument, author: UsuarioDocument) {
+  private forViewer(
+    item: CachedPublicacao,
+    viewerId: string | undefined,
+    authors: Map<string, AuthorSnapshot>,
+  ): CachedPublicacao {
+    const author = authors.get(item.autor.id);
+    if (
+      !author ||
+      author.visibilidade_perfil !== 'privado' ||
+      item.autor.id.toLowerCase() !== viewerId?.toLowerCase()
+    )
+      return item;
+    return {
+      ...item,
+      autor: { ...item.autor, biografia: author.biografia ?? null },
+    };
+  }
+
+  private toResponse(
+    publication: PublicacaoDocument,
+    author: UsuarioDocument,
+    viewerId?: string,
+  ) {
     return {
       id: publication._id.toString(),
       slug: publication.slug,
@@ -420,7 +483,11 @@ export class PublicacoesService {
         id: author._id.toString(),
         nome: author.nome,
         username: author.username,
-        biografia: author.biografia ?? null,
+        biografia:
+          author.visibilidade_perfil === 'privado' &&
+          author._id.toString().toLowerCase() !== viewerId?.toLowerCase()
+            ? null
+            : (author.biografia ?? null),
         avatarUrl: author.avatar_url ?? null,
       },
       conteudo: publication.conteudo,
