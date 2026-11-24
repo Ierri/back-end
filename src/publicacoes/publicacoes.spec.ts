@@ -86,6 +86,8 @@ function setup(verifier: MediaVerifier = new UnavailableMediaVerifier()) {
     findOne: vi.fn().mockReturnValue(query(saved)),
     findOneAndUpdate: vi.fn().mockReturnValue(query(saved)),
     deleteOne: vi.fn().mockReturnValue(query({ deletedCount: 1 })),
+    aggregate: vi.fn().mockReturnValue(query([])),
+    hydrate: vi.fn((value: Record<string, unknown>) => PublicationModel.hydrate(value)),
   };
   const users = {
     findById: vi.fn().mockReturnValue(query(author)),
@@ -266,6 +268,11 @@ describe('publicações: validação', () => {
     expect(listPublicacoesSchema.safeParse({ unknown: 'value' }).success).toBe(
       false,
     );
+    expect(listPublicacoesSchema.parse({ ordem: 'score' })).toEqual({ limite: 20, ordem: 'score' });
+    expect(listPublicacoesSchema.parse({ ordem: 'score', escopo: 'seguindo' })).toEqual({
+      limite: 20, ordem: 'score', escopo: 'seguindo',
+    });
+    expect(listPublicacoesSchema.safeParse({ ordem: 'votos' }).success).toBe(false);
   });
 
   it('has indexes for public and author cursor queries', () => {
@@ -279,6 +286,13 @@ describe('publicações: validação', () => {
     expect(indexes).toContainEqual({
       autor_id: 1,
       status: 1,
+      publicada_em: -1,
+      _id: -1,
+    });
+    expect(indexes).toContainEqual({
+      status: 1,
+      visibilidade: 1,
+      'contadores.score': -1,
       publicada_em: -1,
       _id: -1,
     });
@@ -550,6 +564,58 @@ describe('PublicacoesService', () => {
 });
 
 describe('PublicacoesService list', () => {
+  it('sorts the ranking by score, date and ID and filters active authors before limiting', async () => {
+    const { service, publications, cache } = setup();
+    const ranked = publication({
+      publicada_em: new Date('2026-11-09T12:00:00.000Z'),
+      contadores: { upvotes: 0, downvotes: 2, score: -2, comentarios: 0, salvamentos: 0 },
+    });
+    publications.aggregate.mockReturnValue(query([ranked.toObject()]));
+    cache.pageAddress.mockResolvedValue({ key: 'shared-page' });
+    const result = await service.list({ limite: 1, ordem: 'score' });
+    expect(result.items.map((item) => item.contadores.score)).toEqual([-2]);
+    const pipeline = publications.aggregate.mock.calls[0][0];
+    expect(pipeline[0]).toEqual({ $match: { status: 'publicada', visibilidade: 'publico' } });
+    expect(pipeline[1]).toEqual({ $sort: { 'contadores.score': -1, publicada_em: -1, _id: -1 } });
+    expect(pipeline[2].$lookup).toMatchObject({ from: 'usuarios', localField: 'autor_id', foreignField: '_id' });
+    expect(pipeline[3]).toEqual({ $match: { 'activeAuthor.0': { $exists: true } } });
+    expect(pipeline[4]).toEqual({ $limit: 2 });
+    expect(cache.pageAddress).not.toHaveBeenCalled();
+    expect(cache.writePage).not.toHaveBeenCalled();
+    expect(publications.find).not.toHaveBeenCalled();
+  });
+
+  it('uses score, date and ID in the next-page filter and isolates Following ranking', async () => {
+    const { service, publications, cursor, access, cache } = setup();
+    const viewerId = new Types.ObjectId().toString();
+    const date = new Date('2026-11-09T12:00:00.000Z');
+    const high = publication({ _id: new Types.ObjectId('00000000000000000000000b'), publicada_em: date,
+      contadores: { upvotes: 2, downvotes: 0, score: 2, comentarios: 0, salvamentos: 0 } });
+    const low = publication({ _id: new Types.ObjectId('00000000000000000000000a'), publicada_em: date,
+      contadores: { upvotes: 0, downvotes: 1, score: -1, comentarios: 0, salvamentos: 0 } });
+    publications.aggregate.mockReturnValueOnce(query([high.toObject(), low.toObject()]))
+      .mockReturnValueOnce(query([low.toObject()]));
+    const first = await service.list({ limite: 1, escopo: 'seguindo', ordem: 'score' }, viewerId);
+    expect(first.nextCursor).toBeTruthy();
+    expect(cursor.decode(first.nextCursor!, {
+      authorId: null, owner: false, viewerId, feed: 'seguindo', order: 'score',
+    })).toEqual({ score: 2, publishedAt: date, id: high._id });
+    const second = await service.list({ limite: 1, escopo: 'seguindo', ordem: 'score', cursor: first.nextCursor! }, viewerId);
+    expect(second.items.map((item) => item.id)).toEqual([low._id.toString()]);
+    expect(access.followingVisibility).toHaveBeenCalledTimes(2);
+    expect(publications.aggregate.mock.calls[1][0][0]).toEqual({
+      $match: { status: 'publicada', $and: [
+        { autor_id: { $in: [authorId] } },
+        { $or: [
+          { 'contadores.score': { $lt: 2 } },
+          { 'contadores.score': 2, publicada_em: { $lt: date } },
+          { 'contadores.score': 2, publicada_em: date, _id: { $lt: high._id } },
+        ] },
+      ] },
+    });
+    expect(cache.pageAddress).not.toHaveBeenCalled();
+  });
+
   it('validates the Following scope and requires authentication', async () => {
     const { service, publications } = setup();
     expect(listPublicacoesSchema.safeParse({ escopo: 'seguindo', autorId: authorId.toString() }).success).toBe(false);

@@ -62,5 +62,25 @@ describe('PublicacoesCursor', () => {
     const legacy = Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString('base64url');
     expect(codec.decode(legacy, { authorId: null, owner: false })).toEqual(position);
     expect(() => codec.decode(legacy, { authorId: null, owner: false, viewerId, feed: 'seguindo' })).toThrow();
+    expect(() => codec.decode(legacy, { authorId: null, owner: false, order: 'score' })).toThrow();
+  });
+
+  it.each([-2, 0, 3])('round-trips score %i and binds ranking to the viewer and feed', (score) => {
+    const viewerId = new Types.ObjectId().toString();
+    const scope = { authorId: null, owner: false, viewerId, feed: 'seguindo' as const, order: 'score' as const };
+    const ranked = codec.encode({ ...position, score }, scope);
+    expect(codec.decode(ranked, scope)).toEqual({ ...position, score });
+    expect(() => codec.decode(ranked, { ...scope, viewerId: new Types.ObjectId().toString() })).toThrow();
+    expect(() => codec.decode(ranked, { ...scope, feed: 'geral' })).toThrow();
+    expect(() => codec.decode(ranked, { ...scope, order: 'cronologica' })).toThrow();
+  });
+
+  it('keeps chronological cursors valid only in chronological requests', () => {
+    const general = { authorId: null, owner: false };
+    const chronological = codec.encode(position, general);
+    expect(codec.decode(chronological, general)).toEqual(position);
+    expect(() => codec.decode(chronological, { ...general, order: 'score' })).toThrow();
+    const ranked = codec.encode({ ...position, score: 0 }, { ...general, order: 'score' });
+    expect(() => codec.decode(ranked, general)).toThrow();
   });
 });

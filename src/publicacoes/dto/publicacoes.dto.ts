@@ -15,6 +15,7 @@ export const listPublicacoesSchema = z.strictObject({
     .optional(),
   autorId: publicacaoIdSchema.optional(),
   escopo: z.literal('seguindo').optional(),
+  ordem: z.literal('score').optional(),
 }).refine((query) => !query.escopo || !query.autorId, {
   path: ['autorId'],
   message: 'autorId não pode ser combinado com escopo=seguindo.',

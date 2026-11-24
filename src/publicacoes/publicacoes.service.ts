@@ -63,11 +63,12 @@ export class PublicacoesService {
       owner: authorId !== null && authorId === viewerId?.toLowerCase(),
       viewerId: viewerId?.toLowerCase() ?? null,
       feed: query.escopo === 'seguindo' ? 'seguindo' as const : 'geral' as const,
+      order: query.ordem === 'score' ? 'score' as const : 'cronologica' as const,
     };
     const position = query.cursor
       ? this.cursor.decode(query.cursor, scope)
       : null;
-    const address = viewerId ? null : await this.cache.pageAddress(
+    const address = viewerId || query.ordem === 'score' ? null : await this.cache.pageAddress(
       query.limite,
       authorId,
       position,
@@ -110,29 +111,47 @@ export class PublicacoesService {
     query: ListPublicacoesDto,
     authorId: string | null,
     owner: boolean,
-    position: { publishedAt: Date; id: Types.ObjectId } | null,
+    position: { publishedAt: Date; id: Types.ObjectId; score?: number } | null,
     viewerId?: string,
   ) {
     const visibility = query.escopo === 'seguindo'
       ? await this.access.followingVisibility(viewerId!)
       : await this.access.listVisibility(viewerId, authorId);
+    const positionFilter = position
+      ? query.ordem === 'score'
+        ? { $or: [
+            { 'contadores.score': { $lt: position.score! } },
+            { 'contadores.score': position.score, publicada_em: { $lt: position.publishedAt } },
+            { 'contadores.score': position.score, publicada_em: position.publishedAt, _id: { $lt: position.id } },
+          ] }
+        : { $or: [
+            { publicada_em: { $lt: position.publishedAt } },
+            { publicada_em: position.publishedAt, _id: { $lt: position.id } },
+          ] }
+      : null;
     const filter = {
       status: 'publicada' as const,
       ...(authorId ? { autor_id: new Types.ObjectId(authorId) } : {}),
-      ...(position ? {
-        $and: [visibility, {
-            $or: [
-              { publicada_em: { $lt: position.publishedAt } },
-              { publicada_em: position.publishedAt, _id: { $lt: position.id } },
-            ],
-          }],
-      } : visibility),
+      ...(positionFilter ? { $and: [visibility, positionFilter] } : visibility),
     };
-    const found = await this.publicacoes
-      .find(filter)
-      .sort({ publicada_em: -1, _id: -1 })
-      .limit(query.limite + 1)
-      .exec();
+    const found = query.ordem === 'score'
+      ? (await this.publicacoes.aggregate<Publicacao>([
+          { $match: filter },
+          { $sort: { 'contadores.score': -1, publicada_em: -1, _id: -1 } },
+          { $lookup: {
+            from: 'usuarios', localField: 'autor_id', foreignField: '_id',
+            pipeline: [{ $match: { status: 'ativo' } }, { $project: { _id: 1 } }],
+            as: 'activeAuthor',
+          } },
+          { $match: { 'activeAuthor.0': { $exists: true } } },
+          { $limit: query.limite + 1 },
+          { $unset: 'activeAuthor' },
+        ]).exec()).map((post) => this.publicacoes.hydrate(post))
+      : await this.publicacoes
+          .find(filter)
+          .sort({ publicada_em: -1, _id: -1 })
+          .limit(query.limite + 1)
+          .exec();
     const hasMore = found.length > query.limite;
     const page = found.slice(0, query.limite);
     const authorIds = [
@@ -163,9 +182,11 @@ export class PublicacoesService {
       nextCursor:
         hasMore && last
           ? this.cursor.encode(
-              { publishedAt: last.publicada_em!, id: last._id },
+              { publishedAt: last.publicada_em!, id: last._id,
+                ...(query.ordem === 'score' ? { score: last.contadores.score } : {}) },
               { authorId, owner, viewerId: viewerId?.toLowerCase() ?? null,
-                feed: query.escopo === 'seguindo' ? 'seguindo' : 'geral' },
+                feed: query.escopo === 'seguindo' ? 'seguindo' : 'geral',
+                order: query.ordem === 'score' ? 'score' : 'cronologica' },
             )
           : null,
       hasMore,
@@ -173,7 +194,7 @@ export class PublicacoesService {
     return {
       shared,
       viewer: viewerId ? { ...shared, items: viewerItems } : shared,
-      cacheable: !viewerId && page.every(
+      cacheable: !viewerId && query.ordem !== 'score' && page.every(
         (post) =>
           post.visibilidade === 'publico' &&
           !post.votos_projecao_pendente &&
