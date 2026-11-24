@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuthModule } from '../auth/auth.module.js';
+import { UsuariosModule } from '../usuarios/usuarios.module.js';
 import { Usuario, UsuarioSchema } from '../usuarios/schemas/usuario.schema.js';
 import { Seguidor, SeguidorSchema } from '../usuarios/schemas/seguidor.schema.js';
 import { MEDIA_VERIFIER } from './media-verifier.js';
@@ -36,6 +37,7 @@ import { SalvosService } from './salvos.service.js';
 @Module({
   imports: [
     AuthModule,
+    UsuariosModule,
     MongooseModule.forFeature([
       { name: Publicacao.name, schema: PublicacaoSchema },
       { name: Usuario.name, schema: UsuarioSchema },

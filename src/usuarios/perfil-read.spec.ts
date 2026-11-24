@@ -5,6 +5,7 @@ import { PerfilReadService } from './perfil-read.service.js';
 import type { Tecnologia } from './schemas/tecnologia.schema.js';
 import type { Usuario } from './schemas/usuario.schema.js';
 import type { SeguidoresService } from './seguidores.service.js';
+import type { CreatorStatsService } from './creator-stats.service.js';
 
 const ownerId = new Types.ObjectId();
 const firstStackId = new Types.ObjectId();
@@ -54,12 +55,14 @@ function setup(currentUser: unknown = user()) {
     counts: vi.fn().mockResolvedValue({ seguidores: 0, seguindo: 0 }),
     relationship: vi.fn().mockResolvedValue({ enviada: 'nenhuma', recebida: 'nenhuma' }),
   };
+  const creatorStats = { publicPublicationCount: vi.fn().mockResolvedValue(0) };
   const service = new PerfilReadService(
     users as unknown as Model<Usuario>,
     technologies as unknown as Model<Tecnologia>,
     followers as unknown as SeguidoresService,
+    creatorStats as unknown as CreatorStatsService,
   );
-  return { service, users, technologies, techQuery, followers };
+  return { service, users, technologies, techQuery, followers, creatorStats };
 }
 
 describe('PerfilReadService', () => {
@@ -79,7 +82,7 @@ describe('PerfilReadService', () => {
         { id: firstStackId.toString(), nome: 'TypeScript', slug: 'typescript', categoria: 'Linguagem', iconeUrl: '/brand/typescript.svg' },
         { id: secondStackId.toString(), nome: 'React', slug: 'react', categoria: 'Frontend', iconeUrl: null },
       ],
-      contadores: { seguidores: 0, seguindo: 0 },
+      contadores: { seguidores: 0, seguindo: 0, publicacoes: 0, score: 0 },
       criadoEm: new Date('2026-01-01T00:00:00Z'),
       atualizadoEm: new Date('2026-01-02T00:00:00Z'),
     });
@@ -103,7 +106,7 @@ describe('PerfilReadService', () => {
     expect(result).toMatchObject({ id: ownerId.toString(), biografia: 'Biografia', stacks: expect.any(Array) });
     expect(result).not.toHaveProperty('email');
     expect(result).not.toHaveProperty('senha_hash');
-    expect(result).toHaveProperty('contadores', { seguidores: 0, seguindo: 0 });
+    expect(result).toHaveProperty('contadores', { seguidores: 0, seguindo: 0, publicacoes: 0, score: 0 });
     expect(result).not.toHaveProperty('stackIds');
   });
 

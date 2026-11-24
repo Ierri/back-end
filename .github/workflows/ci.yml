@@ -147,6 +147,7 @@ jobs:
             { file: 'publicacoes-privacidade.e2e-spec.ts', label: 'Privacidade de publicações', minimum: 8 },
             { file: 'feed-seguindo.e2e-spec.ts', label: 'Feed de Seguindo e ranking', minimum: 16 },
             { file: 'salvos.e2e-spec.ts', label: 'Publicações salvas', minimum: 10 },
+            { file: 'criadores.e2e-spec.ts', label: 'Contadores e ranking de criadores', minimum: 11 },
           ]) {
             const suite = report.testResults.find(({ name }) => {
               const path = name.replaceAll('\\', '/');

@@ -7,6 +7,7 @@ import { Tecnologia } from './schemas/tecnologia.schema.js';
 import { Usuario } from './schemas/usuario.schema.js';
 import type { UsuarioDocument } from './schemas/usuario.schema.js';
 import { SeguidoresService } from './seguidores.service.js';
+import { CreatorStatsService } from './creator-stats.service.js';
 
 @Injectable()
 export class PerfilReadService {
@@ -15,6 +16,7 @@ export class PerfilReadService {
     @InjectModel(Tecnologia.name)
     private readonly tecnologias: Model<Tecnologia>,
     @Inject(SeguidoresService) private readonly seguidores: SeguidoresService,
+    @Inject(CreatorStatsService) private readonly creatorStats: CreatorStatsService,
   ) {}
 
   async findSelf(userId: string) {
@@ -34,7 +36,8 @@ export class PerfilReadService {
       visibilidadePerfil: user.visibilidade_perfil ?? 'publico',
       stackIds,
       stacks,
-      contadores,
+      contadores: { ...contadores, publicacoes: user.contadores?.publicacoes ?? 0,
+        score: user.contadores?.score ?? 0 },
       criadoEm: user.criado_em ?? null,
       atualizadoEm: user.atualizado_em ?? null,
     };
@@ -60,11 +63,16 @@ export class PerfilReadService {
     if (base.visibilidadePerfil === 'privado' && viewerId !== base.id) {
       return { ...base, ...(relacao ? { relacao } : {}) };
     }
-    const [{ stacks }, contadores] = await Promise.all([
+    const [{ stacks }, contadores, publicacoes] = await Promise.all([
       this.readStacks(user),
       this.seguidores.counts(base.id),
+      viewerId === base.id
+        ? Promise.resolve(user.contadores?.publicacoes ?? 0)
+        : this.creatorStats.publicPublicationCount(base.id),
     ]);
-    return { ...base, biografia: user.biografia ?? null, stacks, contadores, ...(relacao ? { relacao } : {}) };
+    return { ...base, biografia: user.biografia ?? null, stacks,
+      contadores: { ...contadores, publicacoes, score: user.contadores?.score ?? 0 },
+      ...(relacao ? { relacao } : {}) };
   }
 
   private async readStacks(user: UsuarioDocument) {

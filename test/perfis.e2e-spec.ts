@@ -298,7 +298,7 @@ describe.runIf(config)('perfis e stacks com MongoDB e Redis locais', () => {
     const publicBob = await request(app.getHttpServer()).get(`/usuarios/${bobUsername}`).expect(200);
     expect(publicBob.body.data).toMatchObject({ id: bobId, biografia: 'Perfil público' });
     expect(publicBob.body.data.stacks.map((item: { id: string }) => item.id)).toEqual(bobStack);
-    expect(publicBob.body.data.contadores).toEqual({ seguidores: 0, seguindo: 0 });
+    expect(publicBob.body.data.contadores).toEqual({ seguidores: 0, seguindo: 0, publicacoes: 0, score: 0 });
     for (const field of ['email', 'senha_hash', 'papeis', 'status']) {
       expect(publicBob.body.data).not.toHaveProperty(field);
     }

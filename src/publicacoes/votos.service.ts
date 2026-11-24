@@ -5,6 +5,7 @@ import { Types } from 'mongoose';
 import type { Model } from 'mongoose';
 import { ApiException } from '../common/http/api.exception.js';
 import { Usuario } from '../usuarios/schemas/usuario.schema.js';
+import { CreatorStatsService } from '../usuarios/creator-stats.service.js';
 import { PublicacoesCacheService } from './publicacoes-cache.service.js';
 import { PublicacaoAccessService } from './publicacao-access.service.js';
 import { Publicacao } from './schemas/publicacao.schema.js';
@@ -23,6 +24,7 @@ const RECOVERY_BATCH = 100;
 
 @Injectable()
 export class VotosService implements OnModuleInit, OnModuleDestroy {
+  @Inject(CreatorStatsService) private creatorStats?: CreatorStatsService;
   private readonly logger = new Logger(VotosService.name);
   private recoveryTimer?: ReturnType<typeof setInterval>;
   private recovering = false;
@@ -305,6 +307,7 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
     ).exec();
     if (result.modifiedCount !== 1) throw new ApiException('VOTO_OPERATION_PENDING');
     await this.invalidate(publicationId, publication.autor_id.toString());
+    await this.creatorStats?.refresh(publication.autor_id.toString()).catch(() => undefined);
     return counts;
   }
 

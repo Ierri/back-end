@@ -84,6 +84,18 @@ export class Usuario {
   @Prop({ type: UsuarioContadoresSchema, required: true, default: () => ({}) })
   contadores: UsuarioContadores;
 
+  @Prop({ type: Number, default: 0 })
+  criador_revisao: number;
+
+  @Prop({ type: Boolean, default: false })
+  criador_projecao_pendente: boolean;
+
+  @Prop({ type: Date, default: () => new Date('9999-12-31T23:59:59.999Z') })
+  criador_proxima_tentativa_em: Date;
+
+  @Prop({ type: Date, default: null })
+  criador_auditoria_em: Date | null;
+
   @Prop({ type: Date, default: null })
   email_verificado_em: Date | null;
 
@@ -104,6 +116,9 @@ export const UsuarioSchema = SchemaFactory.createForClass(Usuario);
 
 UsuarioSchema.index({ email: 1 }, { unique: true });
 UsuarioSchema.index({ username: 1 }, { unique: true });
+UsuarioSchema.index({ criador_projecao_pendente: 1, criador_proxima_tentativa_em: 1, _id: 1 });
+UsuarioSchema.index({ criador_auditoria_em: 1, _id: 1 });
+UsuarioSchema.index({ status: 1, 'contadores.score': -1, _id: -1 });
 UsuarioSchema.pre('validate', function () {
   if ((this.status === 'excluido') !== Boolean(this.excluido_em)) {
     this.invalidate('excluido_em', 'Data de exclusão incompatível com status.');

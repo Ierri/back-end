@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Put,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -21,6 +22,9 @@ import type { ReplaceStacksDto } from './dto/stacks.dto.js';
 import { PerfilReadService } from './perfil-read.service.js';
 import { PerfilUpdateService } from './perfil-update.service.js';
 import { UsuariosStacksService } from './stacks.service.js';
+import { CreatorStatsService } from './creator-stats.service.js';
+import { rankingSchema } from './dto/ranking.dto.js';
+import type { RankingDto } from './dto/ranking.dto.js';
 
 const usernameSchema = z.string().trim().toLowerCase().regex(/^[a-z0-9_]{1,128}$/);
 
@@ -30,6 +34,7 @@ export class UsuariosController {
     @Inject(PerfilReadService) private readonly read: PerfilReadService,
     @Inject(PerfilUpdateService) private readonly update: PerfilUpdateService,
     @Inject(UsuariosStacksService) private readonly stacks: UsuariosStacksService,
+    @Inject(CreatorStatsService) private readonly creatorStats: CreatorStatsService,
   ) {}
 
   @Get('me')
@@ -58,6 +63,12 @@ export class UsuariosController {
     @Req() request: AuthenticatedRequest,
   ) {
     return { stackIds: await this.stacks.replace(request.authUserId, body.stackIds) };
+  }
+
+  @Get('ranking')
+  @ResponseMessage('Ranking de criadores encontrado.')
+  ranking(@Query({ schema: rankingSchema }) query: RankingDto) {
+    return this.creatorStats.ranking(query);
   }
 
   @Get(':username')
