@@ -187,6 +187,9 @@ export class Publicacao {
   })
   status: 'processando' | 'publicada' | 'arquivada' | 'oculta' | 'excluida';
 
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
+  moderacao_pendente: Record<string, unknown> | null;
+
   @Prop({ type: PublicacaoContadoresSchema, default: () => ({}) })
   contadores: PublicacaoContadores;
 
@@ -257,6 +260,8 @@ PublicacaoSchema.index({ votos_projecao_pendente: 1, votos_proxima_tentativa_em:
 PublicacaoSchema.index({ votos_auditoria_em: 1, _id: 1 });
 PublicacaoSchema.index({ salvamentos_projecao_pendente: 1, salvamentos_proxima_tentativa_em: 1, _id: 1 });
 PublicacaoSchema.index({ salvamentos_auditoria_em: 1, _id: 1 });
+PublicacaoSchema.index({ 'moderacao_pendente.id': 1, _id: 1 },
+  { partialFilterExpression: { 'moderacao_pendente.id': { $exists: true } } });
 PublicacaoSchema.index({
   autor_id: 1,
   status: 1,

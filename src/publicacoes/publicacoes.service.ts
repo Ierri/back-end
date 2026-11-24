@@ -161,7 +161,7 @@ export class PublicacoesService {
     ];
     const authors = authorIds.length
       ? await this.usuarios
-          .find({ _id: { $in: authorIds } })
+          .find({ _id: { $in: authorIds }, status: 'ativo' })
           .select('nome username biografia avatar_url visibilidade_perfil')
           .exec()
       : [];
@@ -332,7 +332,8 @@ export class PublicacoesService {
       .findById(publication.autor_id)
       .select('nome username biografia avatar_url visibilidade_perfil')
       .exec();
-    if (!author) throw new ApiException('PUBLICACAO_NOT_FOUND');
+    if (!author || author.status === 'bloqueado' || author.status === 'excluido')
+      throw new ApiException('PUBLICACAO_NOT_FOUND');
     return {
       shared: this.toResponse(publication, author),
       viewer: this.toResponse(publication, author, viewerId),
@@ -424,7 +425,7 @@ export class PublicacoesService {
     }
     const authorIds = [...new Set(cached.map((item) => item.autor.id))];
     const authors = await this.usuarios
-      .find({ _id: { $in: authorIds } })
+      .find({ _id: { $in: authorIds }, status: 'ativo' })
       .select('nome username biografia avatar_url visibilidade_perfil')
       .lean()
       .exec();

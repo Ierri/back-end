@@ -170,14 +170,28 @@ export class PublicacoesCacheService {
   }
 
   async invalidate(id: string, authorId: string) {
-    if (!this.client.enabled) return;
+    if (!this.client.enabled) return true;
     const keys = [
       `${this.client.prefix}generation:feed`,
       `${this.client.prefix}generation:author:${this.hash(authorId.toLowerCase())}`,
       `${this.client.prefix}generation:post:${this.hash(id.toLowerCase())}`,
     ];
-    if (await this.client.invalidate(keys)) this.counters.invalidation++;
+    const success = await this.client.invalidate(keys);
+    if (success) this.counters.invalidation++;
     else this.counters.error++;
+    return success;
+  }
+
+  async invalidateAuthor(authorId: string) {
+    if (!this.client.enabled) return true;
+    const keys = [
+      `${this.client.prefix}generation:feed`,
+      `${this.client.prefix}generation:author:${this.hash(authorId.toLowerCase())}`,
+    ];
+    const success = await this.client.invalidate(keys);
+    if (success) this.counters.invalidation++;
+    else this.counters.error++;
+    return success;
   }
 
   async coalesce<T>(key: string, load: () => Promise<T>): Promise<T> {

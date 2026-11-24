@@ -25,6 +25,9 @@ export class Comentario {
   @Prop({ type: String, enum: ['publicado', 'excluido', 'oculto'], default: 'publicado' })
   status: 'publicado' | 'excluido' | 'oculto';
 
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
+  moderacao_pendente: Record<string, unknown> | null;
+
   @Prop({ type: String, enum: ['pendente', 'confirmado', 'falhou'], default: 'confirmado' })
   criacao_estado: 'pendente' | 'confirmado' | 'falhou';
 
@@ -57,3 +60,5 @@ ComentarioSchema.pre('validate', function () {
 
 ComentarioSchema.index({ publicacao_id: 1, comentario_pai_id: 1, criado_em: 1, _id: 1 });
 ComentarioSchema.index({ notificacao_pendente: 1, _id: 1 });
+ComentarioSchema.index({ 'moderacao_pendente.id': 1, _id: 1 },
+  { partialFilterExpression: { 'moderacao_pendente.id': { $exists: true } } });

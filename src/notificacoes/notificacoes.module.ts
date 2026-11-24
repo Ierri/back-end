@@ -14,5 +14,6 @@ import { NotificacoesService } from './notificacoes.service.js';
     MongooseModule.forFeature([{ name: Notificacao.name, schema: NotificacaoSchema }])],
   controllers: [NotificacoesController],
   providers: [NotificacoesAuthGuard, NotificacoesCursor, NotificacoesService],
+  exports: [NotificacoesAuthGuard],
 })
 export class NotificacoesModule {}

@@ -81,6 +81,12 @@ export class Usuario {
   @Prop({ type: String, required: true, enum: ['ativo', 'bloqueado', 'excluido'], default: 'ativo' })
   status: 'ativo' | 'bloqueado' | 'excluido';
 
+  @Prop({ type: Number, default: 0, min: 0 })
+  auth_versao: number;
+
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
+  moderacao_pendente: Record<string, unknown> | null;
+
   @Prop({ type: UsuarioContadoresSchema, required: true, default: () => ({}) })
   contadores: UsuarioContadores;
 
@@ -119,6 +125,8 @@ UsuarioSchema.index({ username: 1 }, { unique: true });
 UsuarioSchema.index({ criador_projecao_pendente: 1, criador_proxima_tentativa_em: 1, _id: 1 });
 UsuarioSchema.index({ criador_auditoria_em: 1, _id: 1 });
 UsuarioSchema.index({ status: 1, 'contadores.score': -1, _id: -1 });
+UsuarioSchema.index({ 'moderacao_pendente.id': 1, _id: 1 },
+  { partialFilterExpression: { 'moderacao_pendente.id': { $exists: true } } });
 UsuarioSchema.pre('validate', function () {
   if ((this.status === 'excluido') !== Boolean(this.excluido_em)) {
     this.invalidate('excluido_em', 'Data de exclusão incompatível com status.');

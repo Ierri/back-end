@@ -154,6 +154,38 @@ export const API_ERRORS = {
     status: HttpStatus.NOT_FOUND,
     message: 'Mídia não encontrada.',
   },
+  DENUNCIA_ALVO_NAO_ENCONTRADO: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'Alvo da denúncia não encontrado.',
+  },
+  DENUNCIA_NAO_ENCONTRADA: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'Denúncia não encontrada.',
+  },
+  DENUNCIA_PROPRIA: {
+    status: HttpStatus.UNPROCESSABLE_ENTITY,
+    message: 'Não é possível denunciar o próprio conteúdo.',
+  },
+  DENUNCIA_DUPLICADA: {
+    status: HttpStatus.CONFLICT,
+    message: 'Já existe uma denúncia pendente para este alvo.',
+  },
+  DENUNCIA_NAO_PENDENTE: {
+    status: HttpStatus.CONFLICT,
+    message: 'A denúncia já foi analisada ou não existe.',
+  },
+  MODERACAO_TRANSICAO_INVALIDA: {
+    status: HttpStatus.CONFLICT,
+    message: 'A transição de moderação não é permitida.',
+  },
+  MODERACAO_CONCORRENTE: {
+    status: HttpStatus.CONFLICT,
+    message: 'O alvo foi alterado. Consulte seu estado atual.',
+  },
+  MODERACAO_SEM_PERMISSAO: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'Sem permissão para moderar esta conta.',
+  },
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERRORS;

@@ -23,5 +23,6 @@ import { NotificationProducerModule } from '../notificacoes/notification-produce
   ],
   controllers: [ComentariosController],
   providers: [ComentariosService, ComentariosCursor],
+  exports: [ComentariosService],
 })
 export class ComentariosModule {}
