@@ -165,10 +165,12 @@ describe('Auth HTTP (isolated persistence)', () => {
       'iss',
       'sid',
       'sub',
+      'ver',
     ]);
     expect(payload.iss).toBe('ierri-api');
     expect(payload.aud).toBe('ierri-api');
     expect(payload.sub).toBe(stored._id.toString());
+    expect(payload.ver).toBe(0);
     expect(sessions.get(payload.sid)).toMatchObject({
       userId: payload.sub,
       revoked: false,

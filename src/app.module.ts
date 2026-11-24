@@ -10,6 +10,7 @@ import { PublicacoesModule } from './publicacoes/publicacoes.module.js';
 import { ComentariosModule } from './comentarios/comentarios.module.js';
 import { PerfisModule } from './perfis/perfis.module.js';
 import { NotificacoesModule } from './notificacoes/notificacoes.module.js';
+import { ModeracaoModule } from './moderacao/moderacao.module.js';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { NotificacoesModule } from './notificacoes/notificacoes.module.js';
     ComentariosModule,
     PerfisModule,
     NotificacoesModule,
+    ModeracaoModule,
   ],
   controllers: [AppController],
   providers: [AppService],

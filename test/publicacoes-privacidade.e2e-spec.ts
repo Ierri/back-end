@@ -273,7 +273,7 @@ describe.runIf(config)('privacidade de publicações com MongoDB, Redis e MinIO 
       );
       await detail(restrictedId, follower).expect(404);
       expect((await list(`?autorId=${author.id}`, follower).expect(200)).body.data.items)
-        .toHaveLength(1);
+        .toHaveLength(0);
       await connection.db!.collection('usuarios').updateOne(
         { _id: new Types.ObjectId(author.id) }, { $set: { status: 'ativo', excluido_em: null } },
       );

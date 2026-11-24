@@ -32,7 +32,8 @@ export class JwtAuthGuard implements CanActivate {
     await this.sessoes.assertActive(payload.sid, payload.sub);
     let active;
     try {
-      active = await this.usuarios.hasActiveStatus(payload.sub);
+      active = payload.ver ? await this.usuarios.hasActiveStatus(payload.sub, payload.ver)
+        : await this.usuarios.hasActiveStatus(payload.sub);
     } catch {
       throw new ApiException('AUTH_STATUS_UNAVAILABLE');
     }
@@ -66,12 +67,13 @@ export class JwtAuthGuard implements CanActivate {
   }
 
   private async verifyToken(token: string, ignoreExpiration: boolean) {
-    let payload: { sub: string; sid: string; exp: number };
+    let payload: { sub: string; sid: string; exp: number; ver?: number };
     try {
       payload = await this.jwt.verifyAsync<{
         sub: string;
         sid: string;
         exp: number;
+        ver?: number;
       }>(token, {
         algorithms: ['HS256'],
         issuer: 'ierri-api',
@@ -84,7 +86,8 @@ export class JwtAuthGuard implements CanActivate {
         typeof payload.sid !== 'string' ||
         !/^[A-Za-z0-9_-]{43}$/.test(payload.sid) ||
         typeof payload.exp !== 'number' ||
-        !Number.isFinite(payload.exp)
+        !Number.isFinite(payload.exp) ||
+        (payload.ver !== undefined && (!Number.isSafeInteger(payload.ver) || payload.ver < 0))
       ) {
         throw new Error('Invalid subject');
       }

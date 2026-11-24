@@ -9,7 +9,8 @@ import type { CheckEmailDto, LoginDto, RegisterDto } from './dto/auth.dto.js';
 import { ApiException } from '../common/http/api.exception.js';
 import { SessionPersistenceError, SessoesService } from './sessoes.service.js';
 
-type AuthUser = Pick<Usuario, 'nome' | 'email' | 'username' | 'biografia' | 'avatar_url' | 'criado_em'> & {
+type AuthUser = Pick<Usuario, 'nome' | 'email' | 'username' | 'biografia' | 'avatar_url' | 'criado_em'> &
+  Partial<Pick<Usuario, 'auth_versao'>> & {
   _id: Types.ObjectId;
 };
 
@@ -80,7 +81,8 @@ export class AuthService {
   private async authenticate(usuario: AuthUser) {
     const usuarioId = usuario._id.toString();
     const id = randomBytes(32).toString('base64url');
-    const accessToken = await this.jwt.signAsync({ sub: usuarioId, sid: id });
+    const accessToken = await this.jwt.signAsync({ sub: usuarioId, sid: id,
+      ver: usuario.auth_versao ?? 0 });
     const payload = this.jwt.decode<{ iat: number; exp: number }>(accessToken);
     if (!payload?.exp || !payload.iat) throw new Error('Invalid signed token');
     await this.sessoes.create(id, usuarioId, new Date(payload.exp * 1000));

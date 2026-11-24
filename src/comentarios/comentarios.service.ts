@@ -238,7 +238,7 @@ export class ComentariosService {
     const page = found.slice(0, query.limite);
     const authorIds = [...new Set(page.map((item) => item.autor_id.toString()))];
     const authors = authorIds.length
-      ? await this.usuarios.find({ _id: { $in: authorIds } })
+      ? await this.usuarios.find({ _id: { $in: authorIds }, status: 'ativo' })
           .select('nome username avatar_url').exec()
       : [];
     const byId = new Map(authors.map((author) => [author._id.toString(), author]));

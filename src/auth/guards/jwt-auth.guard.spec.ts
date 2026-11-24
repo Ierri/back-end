@@ -47,6 +47,17 @@ describe('JwtAuthGuard account status', () => {
     expect(request.authSessionId).toBeUndefined();
   });
 
+  it('requires the current session version after a block and unblock', async () => {
+    const { guard, request, jwt, usuarios } = setup();
+    jwt.verifyAsync.mockResolvedValue({ sub: userId, sid: sessionId,
+      exp: Math.floor(Date.now() / 1000) + 900, ver: 2 });
+    usuarios.hasActiveStatus.mockResolvedValue(null);
+    await expect(guard.authenticate(request)).rejects.toMatchObject({
+      status: 401, response: { code: 'INVALID_TOKEN' },
+    });
+    expect(usuarios.hasActiveStatus).toHaveBeenCalledWith(userId, 2);
+  });
+
   it('maps MongoDB status lookup failure to 503 without granting access', async () => {
     const { guard, request, usuarios } = setup();
     usuarios.hasActiveStatus.mockRejectedValue(new Error('MongoDB unavailable'));

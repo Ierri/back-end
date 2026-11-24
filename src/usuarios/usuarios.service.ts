@@ -22,8 +22,9 @@ export class UsuariosService {
     return this.usuarios.findById(id).exec();
   }
 
-  hasActiveStatus(id: string) {
-    return this.usuarios.exists({ _id: id, status: 'ativo' });
+  hasActiveStatus(id: string, version = 0) {
+    return this.usuarios.exists({ _id: id, status: 'ativo',
+      auth_versao: version === 0 ? { $in: [0, null] } : version });
   }
 
   async create(data: Pick<Usuario, 'nome' | 'email' | 'senha_hash'>) {

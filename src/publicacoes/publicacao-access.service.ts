@@ -18,7 +18,8 @@ export class PublicacaoAccessService {
 
   async canRead(publication: PublicationAccess, viewerId?: string) {
     if (publication.status !== 'publicada') return false;
-    if (publication.visibilidade === 'publico') return true;
+    if (publication.visibilidade === 'publico')
+      return Boolean(await this.usuarios.exists({ _id: publication.autor_id, status: 'ativo' }));
     if (publication.visibilidade !== 'seguidores' || !viewerId) return false;
     const viewer = new Types.ObjectId(viewerId);
     const author = publication.autor_id;

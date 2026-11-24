@@ -746,6 +746,7 @@ describe('PublicacoesService list', () => {
     expect(users.find).toHaveBeenCalledTimes(1);
     expect(users.find.mock.calls[0][0]).toEqual({
       _id: { $in: [authorId.toString()] },
+      status: 'ativo',
     });
     expect(first.items[0].autor).not.toHaveProperty('email');
     expect(first.items[0].midias[0]).not.toHaveProperty('chave_storage');

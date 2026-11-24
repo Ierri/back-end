@@ -41,8 +41,10 @@ function setup() {
 
 describe('PublicacaoAccessService', () => {
   it('keeps public posts available and rejects unpublished posts', async () => {
-    const { service, restricted } = setup();
+    const { service, restricted, active } = setup();
     await expect(service.canRead({ ...restricted, visibilidade: 'publico' })).resolves.toBe(true);
+    active.delete(author.toString());
+    await expect(service.canRead({ ...restricted, visibilidade: 'publico' })).resolves.toBe(false);
     await expect(service.canRead({ ...restricted, status: 'excluida' }, author.toString())).resolves.toBe(false);
   });
 
