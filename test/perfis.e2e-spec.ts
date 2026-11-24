@@ -201,7 +201,7 @@ describe.runIf(config)('perfis e stacks com MongoDB e Redis locais', () => {
     expect(stored?.stack_ids.map((id: Types.ObjectId) => id.toString())).toEqual(twenty);
   });
 
-  it('preserves an inactive historical stack while blocking its reselection', async () => {
+  it('preserves an inactive historical stack during replacement', async () => {
     const id = technologies[0]._id;
     const collection = connection.db!.collection('tecnologias');
     try {
@@ -212,7 +212,7 @@ describe.runIf(config)('perfis e stacks com MongoDB e Redis locais', () => {
         .put('/usuarios/me/stacks')
         .set(auth(aliceToken))
         .send({ stackIds: own.body.data.stackIds })
-        .expect(422);
+        .expect(200);
       const stored = await connection.db!.collection('usuarios').findOne({ _id: new Types.ObjectId(aliceId) });
       expect(stored?.stack_ids.map((item: Types.ObjectId) => item.toString())).toContain(id.toString());
     } finally {

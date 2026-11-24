@@ -3,6 +3,8 @@ import type { Model } from 'mongoose';
 import { ApiException } from '../common/http/api.exception.js';
 import { Tecnologia } from '../usuarios/schemas/tecnologia.schema.js';
 import { listTecnologiasSchema } from './dto/list-tecnologias.dto.js';
+import { createAdminTecnologiaSchema, listAdminTecnologiasSchema,
+  updateAdminTecnologiaSchema } from './dto/admin-tecnologias.dto.js';
 import { TecnologiasService } from './tecnologias.service.js';
 
 function setup(items: Array<Record<string, unknown>>) {
@@ -17,7 +19,8 @@ function setup(items: Array<Record<string, unknown>>) {
   query.sort.mockReturnValue(query);
   query.limit.mockReturnValue(query);
   query.lean.mockReturnValue(query);
-  const technologies = { find: vi.fn().mockReturnValue(query) };
+  const technologies = { find: vi.fn().mockReturnValue(query), create: vi.fn(),
+    findOneAndUpdate: vi.fn().mockReturnValue(query) };
   const service = new TecnologiasService(technologies as unknown as Model<Tecnologia>);
   return { service, technologies, query };
 }
@@ -67,5 +70,74 @@ describe('catálogo público de tecnologias', () => {
     ]);
     await expect(service.list({ busca: 'other', limite: 1, cursor: page.nextCursor! })).rejects.toBeInstanceOf(ApiException);
     await expect(service.list({ limite: 1, cursor: 'invalidcursor' })).rejects.toBeInstanceOf(ApiException);
+  });
+});
+
+describe('administração de tecnologias', () => {
+  it('validates names, slugs, icons, status and nonempty edits', () => {
+    expect(createAdminTecnologiaSchema.parse({ nome: ' TypeScript ', slug: 'TypeScript' }))
+      .toMatchObject({ nome: 'TypeScript', slug: 'typescript' });
+    expect(createAdminTecnologiaSchema.safeParse({ nome: 'A', slug: 'a',
+      iconeUrl: 'https://cdn.example.test/a.svg' }).success).toBe(true);
+    expect(updateAdminTecnologiaSchema.safeParse({ iconeUrl: '/brand/typescript.svg', ativo: false }).success).toBe(true);
+    for (const invalid of [
+      { nome: '', slug: 'tech' }, { nome: 'Tech', slug: 'bad_slug' },
+      { nome: 'Tech', slug: 'tech', iconeUrl: 'http://example.test/icon.svg' },
+      { nome: 'Tech', slug: 'tech', iconeUrl: '/brand/../secret.svg' },
+      { nome: 'Tech', slug: 'tech', ativo: 'false' },
+    ]) expect(createAdminTecnologiaSchema.safeParse(invalid).success).toBe(false);
+    expect(updateAdminTecnologiaSchema.safeParse({}).success).toBe(false);
+    expect(listAdminTecnologiasSchema.parse({})).toEqual({ status: 'todos', limite: 20 });
+    expect(listAdminTecnologiasSchema.safeParse({ status: 'blocked' }).success).toBe(false);
+  });
+
+  it('lists active and inactive records with a filter-bound cursor', async () => {
+    const first = { _id: new Types.ObjectId(), nome: 'Angular', slug: 'angular',
+      categoria: null, icone_url: null, ativo: false };
+    const second = { _id: new Types.ObjectId(), nome: 'React', slug: 'react',
+      categoria: 'Frontend', icone_url: '/brand/react.svg', ativo: false };
+    const { service, technologies, query } = setup([first, second]);
+    const page = await service.adminList({ status: 'inativo', limite: 1 });
+    expect(page.items).toEqual([{ id: first._id.toString(), nome: 'Angular', slug: 'angular',
+      categoria: null, iconeUrl: null, ativo: false }]);
+    expect(technologies.find).toHaveBeenCalledWith({ $and: [{ ativo: false }] });
+    expect(query.limit).toHaveBeenCalledWith(2);
+    await expect(service.adminList({ status: 'ativo', limite: 1, cursor: page.nextCursor! }))
+      .rejects.toBeInstanceOf(ApiException);
+    const next = setup([second]);
+    await expect(next.service.adminList({ status: 'inativo', limite: 1, cursor: page.nextCursor! }))
+      .resolves.toMatchObject({ items: [{ id: second._id.toString() }], hasMore: false });
+  });
+
+  it('creates technologies and maps duplicate slugs to conflict', async () => {
+    const { service, technologies } = setup([]);
+    const id = new Types.ObjectId();
+    technologies.create.mockResolvedValue({ _id: id, nome: 'Rust', slug: 'rust',
+      categoria: null, icone_url: null, ativo: true });
+    await expect(service.create({ nome: 'Rust', slug: 'rust' }))
+      .resolves.toEqual({ id: id.toString(), nome: 'Rust', slug: 'rust',
+        categoria: null, iconeUrl: null, ativo: true });
+    expect(technologies.create).toHaveBeenCalledWith({ nome: 'Rust', slug: 'rust',
+      categoria: null, icone_url: null, ativo: true });
+    technologies.create.mockRejectedValue({ code: 11000 });
+    await expect(service.create({ nome: 'Rust', slug: 'rust' }))
+      .rejects.toMatchObject({ response: { code: 'TECNOLOGIA_SLUG_EXISTS' } });
+  });
+
+  it('edits and deactivates without deleting, and reports missing or duplicate slugs', async () => {
+    const { service, technologies, query } = setup([]);
+    const id = new Types.ObjectId();
+    query.exec.mockResolvedValueOnce({ _id: id, nome: 'Go', slug: 'go',
+      categoria: null, icone_url: null, ativo: false });
+    await expect(service.update(id.toString(), { ativo: false }))
+      .resolves.toMatchObject({ id: id.toString(), ativo: false });
+    expect(technologies.findOneAndUpdate).toHaveBeenCalledWith({ _id: id },
+      { $set: { ativo: false } }, { returnDocument: 'after', runValidators: true });
+    query.exec.mockResolvedValueOnce(null);
+    await expect(service.update(id.toString(), { ativo: true }))
+      .rejects.toMatchObject({ response: { code: 'TECNOLOGIA_NOT_FOUND' } });
+    query.exec.mockRejectedValueOnce({ code: 11000 });
+    await expect(service.update(id.toString(), { slug: 'taken' }))
+      .rejects.toMatchObject({ response: { code: 'TECNOLOGIA_SLUG_EXISTS' } });
   });
 });

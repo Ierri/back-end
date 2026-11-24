@@ -11,6 +11,7 @@ function setup() {
     find: vi.fn(),
   };
   const users = {
+    findOne: vi.fn(),
     findOneAndUpdate: vi.fn(),
   };
   const technologyQuery = {
@@ -25,9 +26,12 @@ function setup() {
   technologies.find.mockReturnValue(technologyQuery);
   const userQuery = {
     select: vi.fn(),
+    lean: vi.fn(),
     exec: vi.fn().mockResolvedValue({ stack_ids: [] }),
   };
   userQuery.select.mockReturnValue(userQuery);
+  userQuery.lean.mockReturnValue(userQuery);
+  users.findOne.mockReturnValue(userQuery);
   users.findOneAndUpdate.mockReturnValue(userQuery);
   const service = new UsuariosStacksService(
     users as unknown as Model<Usuario>,
@@ -54,7 +58,7 @@ describe('seleção de stacks do usuário', () => {
     const userId = new Types.ObjectId().toString();
     const ids = [new Types.ObjectId(), new Types.ObjectId()];
     technologyQuery.exec.mockResolvedValue(ids.map((_id) => ({ _id })));
-    userQuery.exec.mockResolvedValue({ stack_ids: ids });
+    userQuery.exec.mockResolvedValueOnce({ stack_ids: [] }).mockResolvedValueOnce({ stack_ids: ids });
 
     await expect(service.replace(userId, ids.map((id) => id.toString()))).resolves.toEqual(ids.map((id) => id.toString()));
     expect(technologies.find).toHaveBeenCalledWith({ _id: { $in: ids }, ativo: true });
@@ -70,6 +74,31 @@ describe('seleção de stacks do usuário', () => {
     const { service, users } = setup();
     const id = new Types.ObjectId().toString();
     await expect(service.replace(new Types.ObjectId().toString(), [id])).rejects.toBeInstanceOf(ApiException);
+    expect(users.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('keeps historical inactive technologies while allowing their removal', async () => {
+    const { service, technologies, technologyQuery, userQuery } = setup();
+    const inactive = new Types.ObjectId();
+    const active = new Types.ObjectId();
+    userQuery.exec.mockResolvedValueOnce({ stack_ids: [inactive] })
+      .mockResolvedValueOnce({ stack_ids: [inactive, active] });
+    technologyQuery.exec.mockResolvedValue([{ _id: active }]);
+    await expect(service.replace(new Types.ObjectId().toString(),
+      [inactive.toString(), active.toString()])).resolves.toEqual([inactive.toString(), active.toString()]);
+    expect(technologies.find).toHaveBeenCalledWith({ _id: { $in: [active] }, ativo: true });
+    userQuery.exec.mockResolvedValueOnce({ stack_ids: [inactive, active] })
+      .mockResolvedValueOnce({ stack_ids: [active] });
+    await expect(service.replace(new Types.ObjectId().toString(), [active.toString()]))
+      .resolves.toEqual([active.toString()]);
+  });
+
+  it('does not allow a first association with an inactive technology', async () => {
+    const { service, users, userQuery } = setup();
+    const inactive = new Types.ObjectId();
+    userQuery.exec.mockResolvedValueOnce({ stack_ids: [] });
+    await expect(service.replace(new Types.ObjectId().toString(), [inactive.toString()]))
+      .rejects.toMatchObject({ response: { code: 'TECNOLOGIAS_INVALIDAS' } });
     expect(users.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
@@ -89,7 +118,7 @@ describe('seleção de stacks do usuário', () => {
   it('does not replace stacks after the account status changes before the atomic write', async () => {
     const { service, users, userQuery } = setup();
     const userId = new Types.ObjectId().toString();
-    userQuery.exec.mockResolvedValue(null);
+    userQuery.exec.mockResolvedValueOnce({ stack_ids: [] }).mockResolvedValueOnce(null);
     await expect(service.replace(userId, [])).rejects.toMatchObject({
       response: { code: 'AUTH_REQUIRED' },
     });

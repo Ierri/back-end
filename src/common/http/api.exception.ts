@@ -72,6 +72,18 @@ export const API_ERRORS = {
     status: HttpStatus.SERVICE_UNAVAILABLE,
     message: 'Não foi possível validar a conta agora. Tente novamente mais tarde.',
   },
+  ROLE_FORBIDDEN: {
+    status: HttpStatus.FORBIDDEN,
+    message: 'Esta conta não tem permissão para realizar a operação.',
+  },
+  TECNOLOGIA_NOT_FOUND: {
+    status: HttpStatus.NOT_FOUND,
+    message: 'Tecnologia não encontrada.',
+  },
+  TECNOLOGIA_SLUG_EXISTS: {
+    status: HttpStatus.CONFLICT,
+    message: 'Slug de tecnologia já cadastrado.',
+  },
   PUBLICACAO_NOT_FOUND: {
     status: HttpStatus.NOT_FOUND,
     message: 'Publicação não encontrada.',

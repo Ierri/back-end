@@ -5,6 +5,7 @@ import { UsuariosModule } from '../usuarios/usuarios.module.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
+import { RolesGuard } from './guards/roles.guard.js';
 import { RedisSessionClient } from './redis-session.client.js';
 import { SessoesService } from './sessoes.service.js';
 import { CheckEmailRateLimitService } from './check-email-rate-limit.service.js';
@@ -36,10 +37,11 @@ import { CheckEmailRateLimitService } from './check-email-rate-limit.service.js'
   providers: [
     AuthService,
     JwtAuthGuard,
+    RolesGuard,
     SessoesService,
     RedisSessionClient,
     CheckEmailRateLimitService,
   ],
-  exports: [JwtAuthGuard],
+  exports: [JwtAuthGuard, RolesGuard],
 })
 export class AuthModule {}
