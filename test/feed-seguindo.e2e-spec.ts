@@ -51,6 +51,8 @@ describe.runIf(config)('feed de Seguindo com MongoDB e Redis locais', () => {
   let outsider: Account;
   let expected: string[];
   let publicPost: string;
+  let outsiderPost: string;
+  let pendingPublicPost: string;
   const original = Object.fromEntries([
     'MONGODB_URI', 'REDIS_SESSION_PREFIX', 'REDIS_CHECK_EMAIL_RATE_PREFIX',
     'REDIS_CACHE_ENABLED', 'REDIS_CACHE_URL', 'REDIS_CACHE_PREFIX',
@@ -93,6 +95,9 @@ describe.runIf(config)('feed de Seguindo com MongoDB e Redis locais', () => {
     .put(`/usuarios/${target.id}/seguir`).set(auth(account));
   const items = (response: { body: { data: { items: { id: string }[] } } }) =>
     response.body.data.items.map((item) => item.id);
+  const setScore = (id: string, score: number) => publications.updateOne(
+    { _id: new Types.ObjectId(id) }, { $set: { 'contadores.score': score } },
+  ).exec();
 
   beforeAll(async () => {
     process.env.MONGODB_URI = config!.mongo;
@@ -110,6 +115,11 @@ describe.runIf(config)('feed de Seguindo com MongoDB e Redis locais', () => {
     await app.init();
     connection = module.get<Connection>(getConnectionToken());
     publications = module.get<Model<Publicacao>>(getModelToken(Publicacao.name));
+    await Promise.all([
+      connection.model('Publicacao').init(),
+      connection.model('Voto').init(),
+      connection.model('Seguidor').init(),
+    ]);
     cache = module.get(PublicacoesCacheService);
     const cacheClient = module.get(PublicacoesCacheClient);
     for (let attempt = 0; attempt < 30 && !cacheClient.ready; attempt++)
@@ -125,14 +135,19 @@ describe.runIf(config)('feed de Seguindo com MongoDB e Redis locais', () => {
     const third = await makePost(followed, 'seguidores', new Date(now - 3000));
     expected = [first, second].sort((left, right) => right.localeCompare(left)).concat(third);
     publicPost = second;
-    await makePost(pendingAuthor, 'publico', new Date(now + 2000));
+    pendingPublicPost = await makePost(pendingAuthor, 'publico', new Date(now + 2000));
     await makePost(pendingAuthor, 'seguidores', new Date(now + 1000));
-    await makePost(outsider, 'publico', new Date(now + 3000));
+    outsiderPost = await makePost(outsider, 'publico', new Date(now + 3000));
     await makePost(viewer, 'publico', new Date(now + 4000));
   });
 
   beforeEach(async () => {
     await connection.db!.collection('seguidores').deleteMany({});
+    await connection.db!.collection('votos').deleteMany({});
+    await publications.updateMany({}, { $set: {
+      'contadores.upvotes': 0, 'contadores.downvotes': 0, 'contadores.score': 0,
+      votos_projecao_pendente: false, votos_operacoes_pendentes: [],
+    } }).exec();
     await connection.db!.collection('usuarios').updateMany({}, {
       $set: { status: 'ativo', excluido_em: null, 'contadores.seguidores': 0, 'contadores.seguindo': 0 },
     });
@@ -253,6 +268,93 @@ describe.runIf(config)('feed de Seguindo com MongoDB e Redis locais', () => {
     try {
       expect(items(await feed(viewer).expect(200))).toEqual(expected);
       expect(items(await feed(viewer).expect(200))).toEqual(expected);
+      expect(pageAddress).not.toHaveBeenCalled();
+      await request(server()).get('/publicacoes?limite=1').expect(200);
+      expect(pageAddress).toHaveBeenCalled();
+    } finally {
+      pageAddress.mockRestore();
+    }
+  });
+
+  it('ranks positive, zero and negative scores ahead of publication age', async () => {
+    await follow(viewer, followed).expect(200);
+    await setScore(expected[2], 5);
+    await setScore(expected[1], -2);
+    const result = await feed(viewer, '&ordem=score').expect(200);
+    expect(items(result)).toEqual([expected[2], expected[0], expected[1]]);
+    expect(result.body.data.items.map((item: { contadores: { score: number } }) => item.contadores.score))
+      .toEqual([5, 0, -2]);
+  });
+
+  it('filters inactive authors before ranking pagination', async () => {
+    await setScore(outsiderPost, 100);
+    await setScore(pendingPublicPost, 1);
+    await connection.db!.collection('usuarios').updateOne(
+      { _id: new Types.ObjectId(outsider.id) }, { $set: { status: 'bloqueado' } },
+    );
+    const result = await request(server()).get('/publicacoes?ordem=score&limite=1').expect(200);
+    expect(items(result)).toEqual([pendingPublicPost]);
+    expect(result.body.data.hasMore).toBe(true);
+  });
+
+  it('applies accepted-follow and privacy filters before ranking pagination', async () => {
+    await follow(viewer, followed).expect(200);
+    await follow(viewer, pendingAuthor).expect(200);
+    await setScore(pendingPublicPost, 100);
+    await setScore(expected[2], 2);
+    const result = await feed(viewer, '&ordem=score&limite=1').expect(200);
+    expect(items(result)).toEqual([expected[2]]);
+    expect(result.body.data.hasMore).toBe(true);
+  });
+
+  it('updates the ranking after effective votes without changing the score formula', async () => {
+    await follow(viewer, followed).expect(200);
+    await request(server()).put(`/publicacoes/${publicPost}/voto`).set(auth(viewer))
+      .send({ valor: 1 }).expect(200);
+    expect(items(await feed(viewer, '&ordem=score').expect(200))[0]).toBe(publicPost);
+    await request(server()).put(`/publicacoes/${publicPost}/voto`).set(auth(otherViewer))
+      .send({ valor: -1 }).expect(200);
+    expect((await request(server()).get(`/publicacoes/${publicPost}`).expect(200)).body.data.contadores.score).toBe(0);
+    await request(server()).delete(`/publicacoes/${publicPost}/voto`).set(auth(viewer)).expect(200);
+    const result = await feed(viewer, '&ordem=score').expect(200);
+    expect(items(result).at(-1)).toBe(publicPost);
+    expect(result.body.data.items.at(-1).contadores.score).toBe(-1);
+  });
+
+  it('paginates score, publication-date and ID ties without losing or duplicating records', async () => {
+    await follow(viewer, followed).expect(200);
+    for (const id of expected) await setScore(id, 2);
+    const ordered = expected;
+    const pages = [];
+    let cursor: string | null = null;
+    for (let index = 0; index < ordered.length; index++) {
+      const result = await feed(viewer, `&ordem=score&limite=1${cursor ? `&cursor=${cursor}` : ''}`).expect(200);
+      pages.push(...items(result));
+      cursor = result.body.data.nextCursor as string | null;
+    }
+    expect(pages).toEqual(ordered);
+    expect(new Set(pages).size).toBe(ordered.length);
+    expect(cursor).toBeNull();
+  });
+
+  it('isolates ranking cursors by order, viewer and feed scope', async () => {
+    await follow(viewer, followed).expect(200);
+    const following = await feed(viewer, '&ordem=score&limite=1').expect(200);
+    const cursor = following.body.data.nextCursor as string;
+    await feed(otherViewer, `&ordem=score&limite=1&cursor=${cursor}`).expect(400);
+    await feed(viewer, `&limite=1&cursor=${cursor}`).expect(400);
+    await request(server()).get(`/publicacoes?ordem=score&limite=1&cursor=${cursor}`)
+      .set(auth(viewer)).expect(400);
+    const chronological = await feed(viewer, '&limite=1').expect(200);
+    await feed(viewer, `&ordem=score&limite=1&cursor=${chronological.body.data.nextCursor}`).expect(400);
+  });
+
+  it('bypasses shared cache for anonymous and Following rankings while preserving chronological cache', async () => {
+    await follow(viewer, followed).expect(200);
+    const pageAddress = vi.spyOn(cache, 'pageAddress');
+    try {
+      await request(server()).get('/publicacoes?ordem=score').expect(200);
+      await feed(viewer, '&ordem=score').expect(200);
       expect(pageAddress).not.toHaveBeenCalled();
       await request(server()).get('/publicacoes?limite=1').expect(200);
       expect(pageAddress).toHaveBeenCalled();

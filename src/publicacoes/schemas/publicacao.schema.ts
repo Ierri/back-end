@@ -240,4 +240,5 @@ PublicacaoSchema.index({
   visibilidade: 1,
   'contadores.score': -1,
   publicada_em: -1,
+  _id: -1,
 });
