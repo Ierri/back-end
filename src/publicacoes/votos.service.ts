@@ -6,6 +6,7 @@ import type { Model } from 'mongoose';
 import { ApiException } from '../common/http/api.exception.js';
 import { Usuario } from '../usuarios/schemas/usuario.schema.js';
 import { PublicacoesCacheService } from './publicacoes-cache.service.js';
+import { PublicacaoAccessService } from './publicacao-access.service.js';
 import { Publicacao } from './schemas/publicacao.schema.js';
 import type { PublicacaoDocument } from './schemas/publicacao.schema.js';
 import { Voto } from './schemas/voto.schema.js';
@@ -34,6 +35,7 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
     @InjectModel(Publicacao.name) private readonly publicacoes: Model<Publicacao>,
     @InjectModel(Usuario.name) private readonly usuarios: Model<Usuario>,
     @Inject(PublicacoesCacheService) private readonly cache: PublicacoesCacheService,
+    @Inject(PublicacaoAccessService) private readonly access: PublicacaoAccessService,
   ) {}
 
   onModuleInit() {
@@ -72,7 +74,7 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
     const claim = await this.claimVote(publicationId, userId);
     let reservation: Reservation;
     try {
-      reservation = await this.reservePublication(publicationId, userId, publication.autor_id.toString(), claim);
+      reservation = await this.reservePublication(publicationId, userId, publication, claim);
     } catch (error) {
       if (error instanceof ApiException && error.getStatus() !== 503)
         await this.clearVoteClaim(publicationId, userId, claim.token).catch(() => undefined);
@@ -133,12 +135,9 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
     const publication = await this.publicacoes.findOne({
       _id: new Types.ObjectId(publicationId),
       status: 'publicada',
-      $or: [
-        { visibilidade: 'publico' },
-        { autor_id: new Types.ObjectId(userId) },
-      ],
-    }).select('autor_id').exec();
-    if (!publication) throw new ApiException('PUBLICACAO_NOT_FOUND');
+    }).select('autor_id status visibilidade').exec();
+    if (!publication || !await this.access.canRead(publication, userId))
+      throw new ApiException('PUBLICACAO_NOT_FOUND');
     return publication;
   }
 
@@ -192,7 +191,7 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
   private async reservePublication(
     publicationId: string,
     userId: string,
-    authorId: string,
+    publication: PublicacaoDocument,
     claim: Claim,
   ): Promise<Reservation> {
     let result;
@@ -200,13 +199,9 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
       result = await this.publicacoes.updateOne(
         {
           _id: new Types.ObjectId(publicationId),
-          status: 'publicada',
           'votos_operacoes_pendentes.usuario_id': { $ne: new Types.ObjectId(userId) },
           $expr: { $lt: [{ $size: { $ifNull: ['$votos_operacoes_pendentes', []] } }, 128] },
-          $or: [
-            { visibilidade: 'publico' },
-            { autor_id: new Types.ObjectId(userId) },
-          ],
+          ...this.access.writeFilter(publication),
         },
         {
           $push: { votos_operacoes_pendentes: {
@@ -228,7 +223,7 @@ export class VotosService implements OnModuleInit, OnModuleDestroy {
       await this.accessiblePublication(publicationId, userId);
       throw new ApiException('VOTO_OPERATION_PENDING');
     }
-    return { ...claim, authorId };
+    return { ...claim, authorId: publication.autor_id.toString() };
   }
 
   private async releasePublication(publicationId: string, token: string) {

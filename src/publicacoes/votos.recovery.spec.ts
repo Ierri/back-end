@@ -6,6 +6,7 @@ import type { PublicacoesCacheService } from './publicacoes-cache.service.js';
 import { Publicacao } from './schemas/publicacao.schema.js';
 import { Voto } from './schemas/voto.schema.js';
 import { VotosService } from './votos.service.js';
+import type { PublicacaoAccessService } from './publicacao-access.service.js';
 
 function query(value: unknown) {
   return { exec: async () => value };
@@ -103,6 +104,7 @@ function setup(failingCount: number) {
     publicationModel as unknown as Model<Publicacao>,
     {} as Model<Usuario>,
     {} as PublicacoesCacheService,
+    {} as PublicacaoAccessService,
   );
   const reconcile = vi.spyOn(service, 'reconcileCounter').mockImplementation(async (id) => {
     const item = documents.find((candidate) => candidate._id.toString() === id)!;

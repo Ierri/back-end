@@ -5,6 +5,7 @@ import { Types } from 'mongoose';
 import type { Model } from 'mongoose';
 import { ApiException } from '../common/http/api.exception.js';
 import { PublicacoesCacheService } from '../publicacoes/publicacoes-cache.service.js';
+import { PublicacaoAccessService } from '../publicacoes/publicacao-access.service.js';
 import { Publicacao } from '../publicacoes/schemas/publicacao.schema.js';
 import { Usuario } from '../usuarios/schemas/usuario.schema.js';
 import type { UsuarioDocument } from '../usuarios/schemas/usuario.schema.js';
@@ -21,17 +22,16 @@ export class ComentariosService {
     @InjectModel(Usuario.name) private readonly usuarios: Model<Usuario>,
     @Inject(ComentariosCursor) private readonly cursor: ComentariosCursor,
     @Inject(PublicacoesCacheService) private readonly cache: PublicacoesCacheService,
+    @Inject(PublicacaoAccessService) private readonly access: PublicacaoAccessService,
   ) {}
 
   private async accessiblePublication(id: string, viewerId?: string) {
-    const access = viewerId
-      ? [{ visibilidade: 'publico' as const }, { autor_id: new Types.ObjectId(viewerId) }]
-      : [{ visibilidade: 'publico' as const }];
     const publication = await this.publicacoes
-      .findOne({ _id: id, status: 'publicada', $or: access })
-      .select('autor_id')
+      .findOne({ _id: id, status: 'publicada' })
+      .select('autor_id status visibilidade')
       .exec();
-    if (!publication) throw new ApiException('PUBLICACAO_NOT_FOUND');
+    if (!publication || !await this.access.canRead(publication, viewerId))
+      throw new ApiException('PUBLICACAO_NOT_FOUND');
     return publication;
   }
 
@@ -101,9 +101,8 @@ export class ComentariosService {
       const updated = await this.publicacoes.updateOne(
         {
           _id: publication._id,
-          status: 'publicada',
           comentarios_operacoes_pendentes: operation,
-          $or: [{ visibilidade: 'publico' }, { autor_id: new Types.ObjectId(authorId) }],
+          ...this.access.writeFilter(publication),
         },
         { $inc: { 'contadores.comentarios': 1, comentarios_revisao: 1 } },
       ).exec();
@@ -170,12 +169,12 @@ export class ComentariosService {
   }
 
   private async reserveOperation(publicationId: string, operation: string, viewerId: string) {
+    const publication = await this.accessiblePublication(publicationId, viewerId);
     const result = await this.publicacoes.updateOne(
       {
         _id: new Types.ObjectId(publicationId),
-        status: 'publicada',
         comentarios_operacoes_pendentes: { $ne: operation },
-        $or: [{ visibilidade: 'publico' }, { autor_id: new Types.ObjectId(viewerId) }],
+        ...this.access.writeFilter(publication),
       },
       { $addToSet: { comentarios_operacoes_pendentes: operation }, $inc: { comentarios_revisao: 1 } },
     ).exec();
@@ -294,10 +293,9 @@ export class ComentariosService {
       const updated = await this.publicacoes.updateOne(
         {
           _id: publication._id,
-          status: 'publicada',
           comentarios_operacoes_pendentes: operation,
           'contadores.comentarios': { $gt: 0 },
-          $or: [{ visibilidade: 'publico' }, { autor_id: new Types.ObjectId(authorId) }],
+          ...this.access.writeFilter(publication),
         },
         { $inc: { 'contadores.comentarios': -1, comentarios_revisao: 1 } },
       ).exec();

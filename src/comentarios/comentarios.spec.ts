@@ -4,6 +4,7 @@ import type { Model } from 'mongoose';
 import type { ConfigService } from '@nestjs/config';
 import { ApiException } from '../common/http/api.exception.js';
 import type { PublicacoesCacheService } from '../publicacoes/publicacoes-cache.service.js';
+import type { PublicacaoAccessService } from '../publicacoes/publicacao-access.service.js';
 import type { Publicacao } from '../publicacoes/schemas/publicacao.schema.js';
 import type { Usuario } from '../usuarios/schemas/usuario.schema.js';
 import { ComentariosCursor } from './comentarios.cursor.js';
@@ -44,7 +45,7 @@ function comment(overrides: Record<string, unknown> = {}) {
 }
 
 function setup() {
-  const publication = { _id: publicationId, autor_id: authorId };
+  const publication = { _id: publicationId, autor_id: authorId, status: 'publicada', visibilidade: 'publico' };
   const author = { _id: authorId, nome: 'Autora', username: 'autora', avatar_url: null };
   const comments = {
     create: vi.fn().mockImplementation(async (value: Record<string, unknown>) => comment(value)),
@@ -68,14 +69,23 @@ function setup() {
   };
   const cache = { invalidate: vi.fn().mockResolvedValue(undefined) };
   const cursor = new ComentariosCursor({ getOrThrow: () => 'unit-test-secret-for-comment-cursors' } as unknown as ConfigService);
+  const access = {
+    canRead: vi.fn().mockResolvedValue(true),
+    writeFilter: vi.fn().mockImplementation((item: typeof publication) => ({
+      autor_id: item.autor_id,
+      status: item.status,
+      visibilidade: item.visibilidade,
+    })),
+  };
   const service = new ComentariosService(
     comments as unknown as Model<Comentario>,
     publications as unknown as Model<Publicacao>,
     users as unknown as Model<Usuario>,
     cursor,
     cache as unknown as PublicacoesCacheService,
+    access as unknown as PublicacaoAccessService,
   );
-  return { service, comments, publications, users, cache, cursor };
+  return { service, comments, publications, users, cache, cursor, access };
 }
 
 describe('comentários: validação, hierarquia e consistência', () => {
@@ -147,10 +157,7 @@ describe('comentários: validação, hierarquia e consistência', () => {
     publications.updateOne.mockReturnValueOnce(q({ modifiedCount: 0 }));
     await expect(service.create(publicationId.toString(), otherId.toString(), { conteudo: 'Texto' }))
       .rejects.toMatchObject({ response: { code: 'PUBLICACAO_NOT_FOUND' } });
-    expect(publications.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ $or: [{ visibilidade: 'publico' }, { autor_id: otherId }] }),
-      expect.anything(),
-    );
+    expect(publications.updateOne).not.toHaveBeenCalled();
     expect(comments.create).not.toHaveBeenCalled();
   });
 
@@ -161,7 +168,7 @@ describe('comentários: validação, hierarquia e consistência', () => {
     await expect(service.create(publicationId.toString(), otherId.toString(), { conteudo: 'Texto' }))
       .rejects.toMatchObject({ response: { code: 'PUBLICACAO_NOT_FOUND' } });
     expect(publications.updateOne).toHaveBeenNthCalledWith(2,
-      expect.objectContaining({ $or: [{ visibilidade: 'publico' }, { autor_id: otherId }] }),
+      expect.objectContaining({ status: 'publicada', visibilidade: 'publico', autor_id: authorId }),
       expect.anything(),
     );
     expect(comments.updateOne).toHaveBeenCalledWith(

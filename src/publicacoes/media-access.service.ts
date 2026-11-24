@@ -1,9 +1,9 @@
 import { Readable } from 'node:stream';
 import { Inject, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Types } from 'mongoose';
 import type { Model } from 'mongoose';
 import { ApiException } from '../common/http/api.exception.js';
+import { PublicacaoAccessService } from './publicacao-access.service.js';
 import { MediaStorageService } from './media-storage.service.js';
 import { Publicacao } from './schemas/publicacao.schema.js';
 import { UploadMedia } from './schemas/upload-media.schema.js';
@@ -40,6 +40,7 @@ export class MediaAccessService {
     @InjectModel(Publicacao.name)
     private readonly publications: Model<Publicacao>,
     @Inject(MediaStorageService) private readonly storage: MediaStorageService,
+    @Inject(PublicacaoAccessService) private readonly access: PublicacaoAccessService,
   ) {}
 
   async open(reference: string, viewerId?: string, rangeHeader?: string) {
@@ -51,20 +52,14 @@ export class MediaAccessService {
       })
       .exec();
     if (!media?.publicacao_id) throw new ApiException('MEDIA_NOT_FOUND');
-    const access = viewerId
-      ? [
-          { visibilidade: 'publico' as const },
-          { autor_id: new Types.ObjectId(viewerId) },
-        ]
-      : [{ visibilidade: 'publico' as const }];
     const publication = await this.publications
       .findOne({
         _id: media.publicacao_id,
         status: 'publicada',
-        $or: access,
       })
       .exec();
-    if (!publication) throw new ApiException('MEDIA_NOT_FOUND');
+    if (!publication || !await this.access.canRead(publication, viewerId))
+      throw new ApiException('MEDIA_NOT_FOUND');
     const isVideo = media.tipo === 'video';
     const range =
       isVideo && rangeHeader

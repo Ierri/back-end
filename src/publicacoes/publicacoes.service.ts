@@ -12,6 +12,7 @@ import type {
   UpdatePublicacaoDto,
 } from './dto/publicacoes.dto.js';
 import { PublicacoesCacheService } from './publicacoes-cache.service.js';
+import { PublicacaoAccessService } from './publicacao-access.service.js';
 import type {
   CachedPublicacao,
   CachedPublicacoesPage,
@@ -47,6 +48,8 @@ export class PublicacoesService {
     @Inject(PublicacoesCursor) private readonly cursor: PublicacoesCursor,
     @Inject(PublicacoesCacheService)
     private readonly cache: PublicacoesCacheService,
+    @Inject(PublicacaoAccessService)
+    private readonly access: PublicacaoAccessService,
   ) {}
 
   async list(query: ListPublicacoesDto, viewerId?: string) {
@@ -54,11 +57,12 @@ export class PublicacoesService {
     const scope = {
       authorId,
       owner: authorId !== null && authorId === viewerId?.toLowerCase(),
+      viewerId: viewerId?.toLowerCase() ?? null,
     };
     const position = query.cursor
       ? this.cursor.decode(query.cursor, scope)
       : null;
-    const address = await this.cache.pageAddress(
+    const address = viewerId ? null : await this.cache.pageAddress(
       query.limite,
       authorId,
       position,
@@ -104,18 +108,18 @@ export class PublicacoesService {
     position: { publishedAt: Date; id: Types.ObjectId } | null,
     viewerId?: string,
   ) {
+    const visibility = await this.access.listVisibility(viewerId, authorId);
     const filter = {
       status: 'publicada' as const,
       ...(authorId ? { autor_id: new Types.ObjectId(authorId) } : {}),
-      ...(!owner ? { visibilidade: 'publico' as const } : {}),
-      ...(position
-        ? {
+      ...(position ? {
+        $and: [visibility, {
             $or: [
               { publicada_em: { $lt: position.publishedAt } },
               { publicada_em: position.publishedAt, _id: { $lt: position.id } },
             ],
-          }
-        : {}),
+          }],
+      } : visibility),
     };
     const found = await this.publicacoes
       .find(filter)
@@ -153,7 +157,7 @@ export class PublicacoesService {
         hasMore && last
           ? this.cursor.encode(
               { publishedAt: last.publicada_em!, id: last._id },
-              { authorId, owner },
+              { authorId, owner, viewerId: viewerId?.toLowerCase() ?? null },
             )
           : null,
       hasMore,
@@ -161,8 +165,9 @@ export class PublicacoesService {
     return {
       shared,
       viewer: viewerId ? { ...shared, items: viewerItems } : shared,
-      cacheable: page.every(
+      cacheable: !viewerId && page.every(
         (post) =>
+          post.visibilidade === 'publico' &&
           !post.votos_projecao_pendente &&
           !post.votos_operacoes_pendentes?.length,
       ),
@@ -284,16 +289,11 @@ export class PublicacoesService {
   }
 
   private async loadById(id: string, viewerId?: string) {
-    const accessible = viewerId
-      ? [
-          { visibilidade: 'publico' as const },
-          { autor_id: new Types.ObjectId(viewerId) },
-        ]
-      : [{ visibilidade: 'publico' as const }];
     const publication = await this.publicacoes
-      .findOne({ _id: id, status: 'publicada', $or: accessible })
+      .findOne({ _id: id, status: 'publicada' })
       .exec();
-    if (!publication) throw new ApiException('PUBLICACAO_NOT_FOUND');
+    if (!publication || !await this.access.canRead(publication, viewerId))
+      throw new ApiException('PUBLICACAO_NOT_FOUND');
     const author = await this.usuarios
       .findById(publication.autor_id)
       .select('nome username biografia avatar_url visibilidade_perfil')
