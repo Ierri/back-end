@@ -3,6 +3,8 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { z } from 'zod';
 import { PublicacoesCacheClient } from '../publicacoes/publicacoes-cache.client.js';
+import { cachedPublicacaoSchema } from '../publicacoes/publicacoes-cache.service.js';
+import type { CachedPublicacao } from '../publicacoes/publicacoes-cache.service.js';
 import type { BuscaOrder } from './dto/busca.dto.js';
 
 const MAX_PAYLOAD_BYTES = 262_144;
@@ -12,17 +14,6 @@ const cursorToken = z
   .string()
   .regex(/^[A-Za-z0-9_-]{28,512}$/)
   .nullable();
-const cachedDate = z.iso.datetime().transform((value) => new Date(value));
-const mediaUrl = z.url().refine((value) => {
-  const url = new URL(value);
-  return (
-    ['http:', 'https:'].includes(url.protocol) &&
-    !url.username &&
-    !url.password &&
-    !url.search &&
-    !url.hash
-  );
-});
 
 const techItemSchema = z.strictObject({
   id: objectId,
@@ -67,48 +58,8 @@ const cachedUsersPageSchema = z.strictObject({
   hasMore: z.boolean(),
 });
 
-const mediaSchema = z.strictObject({
-  id: objectId,
-  tipo: z.enum(['imagem', 'video']),
-  url: mediaUrl,
-  mimeType: z.string(),
-  tamanhoBytes: z.number().int().positive(),
-  largura: z.number().int().positive().nullable(),
-  altura: z.number().int().positive().nullable(),
-  duracaoSegundos: z.number().positive().nullable(),
-  textoAlternativo: z.string().nullable(),
-  ordem: z.number().int().nonnegative(),
-});
-
-const cachedPostSchema = z.strictObject({
-  id: objectId,
-  slug: z.string(),
-  autor: z.strictObject({
-    id: objectId,
-    nome: z.string(),
-    username: z.string(),
-    biografia: z.string().nullable(),
-    avatarUrl: z.string().nullable(),
-  }),
-  conteudo: z.string(),
-  midias: z.array(mediaSchema).min(1).max(10),
-  visibilidade: z.literal('publico'),
-  status: z.literal('publicada'),
-  contadores: z.strictObject({
-    upvotes: z.number(),
-    downvotes: z.number(),
-    score: z.number(),
-    comentarios: z.number(),
-    salvamentos: z.number(),
-  }),
-  publicadaEm: cachedDate,
-  editadaEm: cachedDate.nullable(),
-  criadaEm: cachedDate,
-  atualizadaEm: cachedDate,
-});
-
 const cachedPublicationsPageSchema = z.strictObject({
-  items: z.array(cachedPostSchema).max(20),
+  items: z.array(cachedPublicacaoSchema).max(20),
   nextCursor: cursorToken,
   hasMore: z.boolean(),
 });
@@ -125,7 +76,7 @@ const cachedOverviewSchema = z.strictObject({
 export type CachedTechItem = z.infer<typeof techItemSchema>;
 export type CachedPublicSignals = z.infer<typeof cachedSignalsSchema>;
 export type CachedUsersPage = z.infer<typeof cachedUsersPageSchema>;
-export type CachedSearchPost = z.infer<typeof cachedPostSchema>;
+export type CachedSearchPost = CachedPublicacao;
 export type CachedPublicationsPage = z.infer<
   typeof cachedPublicationsPageSchema
 >;
@@ -178,6 +129,10 @@ export class BuscaCacheService {
 
   countStaleMiss() {
     this.counters.staleMiss++;
+  }
+
+  async evict(address: BuscaCacheAddress): Promise<void> {
+    await this.client.del(address.key);
   }
 
   async techCatalogAddress(): Promise<BuscaCacheAddress | null> {
@@ -327,12 +282,15 @@ export class BuscaCacheService {
   }
 
   async coalesce<T>(key: string, load: () => Promise<T>): Promise<T> {
-    const current = this.pending.get(key);
-    if (current) return current as Promise<T>;
+    const current = this.pending.get(key) as Promise<T> | undefined;
+    if (current) {
+      return structuredClone(await current);
+    }
     const loading = Promise.resolve().then(load);
     this.pending.set(key, loading);
     try {
-      return await loading;
+      const resolved = await loading;
+      return structuredClone(resolved);
     } finally {
       if (this.pending.get(key) === loading) this.pending.delete(key);
     }

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { stripAccents, stripOrphanCombiningMarks } from '../busca-pattern.js';
 
 export const MAX_SEARCH_LENGTH = 80;
 
@@ -18,9 +19,14 @@ export const searchTermSchema = z
   .refine((value) => !hasControlChars(value), {
     message: 'Termo de busca inválido.',
   })
-  .refine((value) => value.replace(/^@+/, '').trim().length >= 1, {
-    message: 'Informe ao menos um caractere válido para pesquisar.',
-  });
+  .refine(
+    (value) =>
+      stripAccents(stripOrphanCombiningMarks(value)).replace(/@/g, ' ').trim()
+        .length >= 1,
+    {
+      message: 'Informe ao menos um caractere válido para pesquisar.',
+    },
+  );
 
 const limitOverviewSchema = z
   .string()

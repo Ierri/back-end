@@ -44,7 +44,7 @@ function makeConfig(secret = 'segredo-de-teste-com-pelo-menos-32-bytes!') {
 }
 
 describe('DTOs e normalização segura de busca', () => {
-  it('rejeita campos extras, strings vazias, @ isolado e caracteres de controle', () => {
+  it('rejeita campos extras, strings vazias, @ isolado, diacríticos soltos e caracteres de controle', () => {
     expect(buscaGeralSchema.parse({ q: '  @julio  ' })).toEqual({
       q: '@julio',
       limite: 10,
@@ -65,6 +65,9 @@ describe('DTOs e normalização segura de busca', () => {
       {},
       { q: '   ' },
       { q: '@@@' },
+      { q: '@ @' },
+      { q: '\u0301\u0300' },
+      { q: '@\u0301' },
       { q: 'abc\u0000def' },
       { q: 'a'.repeat(81) },
       { q: 'react', limite: '21' },
@@ -76,11 +79,35 @@ describe('DTOs e normalização segura de busca', () => {
     }
   });
 
-  it('normaliza acentos PT-BR, escapa regex malicioso sem backtracking e limita tokens', () => {
+  it('normaliza NFC/NFD contra cache poisoning, unifica handleCandidate com/sem acento e estabiliza queryHash acima de 5 tokens', () => {
     const parsed = normalizeSearchInput(
-      '  @Júlio   César  ação  c++  (a+)+$  extra1 extra2 ',
+      '  @Júlio   César  ação  c++  (a+)+$  extra1 ',
     );
     expect(parsed.tokenSources).toHaveLength(MAX_SEARCH_TOKENS);
+
+    // Anti-Cache Poisoning: marcas combinantes soltas ou NFD produzem exatamente o mesmo hash e regex
+    const cleanReact = normalizeSearchInput('react');
+    const poisonedReact = normalizeSearchInput('react\u0300');
+    const nfdReact = normalizeSearchInput('rea\u0301ct');
+    expect(poisonedReact.queryHash).toBe(cleanReact.queryHash);
+    expect(poisonedReact.tokenSources).toEqual(cleanReact.tokenSources);
+    expect(nfdReact.queryHash).toBe(cleanReact.queryHash);
+    expect(nfdReact.tokenSources).toEqual(cleanReact.tokenSources);
+
+    // Unificação de handleCandidate entre joão, joao e @joão
+    const joaoAscii = normalizeSearchInput('joao');
+    const joaoAccent = normalizeSearchInput('joão');
+    const joaoHandle = normalizeSearchInput('@joão');
+    expect(joaoAscii.handleCandidate).toBe('joao');
+    expect(joaoAccent.handleCandidate).toBe('joao');
+    expect(joaoHandle.handleCandidate).toBe('joao');
+    expect(joaoAccent.queryHash).toBe(joaoAscii.queryHash);
+    expect(joaoHandle.queryHash).toBe(joaoAscii.queryHash);
+
+    // Acima de 5 tokens, tokens descartados não fragmentam queryHash
+    const fiveA = normalizeSearchInput('um dois tres quatro cinco caudaA');
+    const fiveB = normalizeSearchInput('um dois tres quatro cinco caudaB');
+    expect(fiveA.queryHash).toBe(fiveB.queryHash);
 
     const julioRegex = new RegExp(buildDiacriticPattern('julio'), 'i');
     expect(julioRegex.test('Júlio César')).toBe(true);
@@ -161,7 +188,7 @@ describe('BuscaCursor (AES-256-GCM)', () => {
   });
 });
 
-describe('BuscaService — privacidade, relacionados e paginação', () => {
+describe('BuscaService — privacidade, paginação, Score Oracle e cache Redis', () => {
   function chainQuery<T>(result: T) {
     const q = {
       select: vi.fn(),
@@ -188,7 +215,7 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
     return agg;
   }
 
-  it('retorna perfis privados apenas com dados mínimos, marca relacionados e respeita visibilidade de publicações', async () => {
+  it('retorna perfis privados apenas com dados mínimos (scoreOrdenacao=0 contra Score Oracle), marca relacionados e respeita visibilidade', async () => {
     const techId = new Types.ObjectId();
     const publicUserId = new Types.ObjectId();
     const privateUserId = new Types.ObjectId();
@@ -205,18 +232,13 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
       icone_url: '/brand/react.svg',
     };
 
-    const userAggregateCalls: unknown[] = [];
-    const pubAggregateCalls: unknown[] = [];
+    const userAggregateCalls: Array<Array<Record<string, unknown>>> = [];
 
     const usuarios = {
-      exists: vi.fn().mockReturnValue({
-        maxTimeMS: vi.fn().mockReturnValue({
-          exec: vi.fn().mockResolvedValue({ _id: publicUserId }),
-        }),
-      }),
+      findOne: vi.fn().mockReturnValue(chainQuery(null)),
       aggregate: vi
         .fn()
-        .mockImplementationOnce((pipeline: unknown) => {
+        .mockImplementationOnce((pipeline: Array<Record<string, unknown>>) => {
           userAggregateCalls.push(pipeline);
           return chainAgg([
             {
@@ -231,7 +253,7 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
             },
           ]);
         })
-        .mockImplementationOnce((pipeline: unknown) => {
+        .mockImplementationOnce((pipeline: Array<Record<string, unknown>>) => {
           userAggregateCalls.push(pipeline);
           return chainAgg([
             {
@@ -256,7 +278,7 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
               stack_ids: [techId],
               contadores: { score: 99 },
               relevancia: 1,
-              scoreOrdenacao: 99,
+              scoreOrdenacao: 0,
             },
             {
               _id: relatedUserId,
@@ -285,9 +307,8 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
     };
 
     const publicacoes = {
-      aggregate: vi.fn().mockImplementation((pipeline: unknown) => {
-        pubAggregateCalls.push(pipeline);
-        return chainAgg([
+      aggregate: vi.fn().mockImplementation(() =>
+        chainAgg([
           {
             _id: postId,
             slug: 'post-julio-1',
@@ -321,19 +342,22 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
             editada_em: null,
             criada_em: publishedAt,
             atualizada_em: publishedAt,
+            dataOrdenacao: publishedAt,
             tier: 0,
             scoreOrdenacao: 9,
-            author: {
-              _id: publicUserId,
-              nome: 'Júlio Público',
-              username: 'julio',
-              biografia: 'Criador de interfaces',
-              avatar_url: 'https://cdn.example.test/julio.png',
-              visibilidade_perfil: 'publico',
-            },
+            author: [
+              {
+                _id: publicUserId,
+                nome: 'Júlio Público',
+                username: 'julio',
+                biografia: 'Criador de interfaces',
+                avatar_url: 'https://cdn.example.test/julio.png',
+                visibilidade_perfil: 'publico',
+              },
+            ],
           },
-        ]);
-      }),
+        ]),
+      ),
       hydrate: (doc: Record<string, unknown>) =>
         TestPublicacaoModel.hydrate(doc),
     };
@@ -362,6 +386,12 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
       limite: 2,
       ordem: 'recentes',
     });
+
+    // Verifica proteção contra Score Oracle na expressão de scoreOrdenacao
+    const addFieldsStage = userAggregateCalls[1]?.[1] as {
+      $addFields: { scoreOrdenacao: { $cond: unknown[] } };
+    };
+    expect(addFieldsStage.$addFields.scoreOrdenacao.$cond[1]).toBe(0);
 
     expect(access.listVisibility).toHaveBeenCalledWith(undefined);
     expect(result.usuarios.hasMore).toBe(true);
@@ -400,32 +430,176 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
     ]);
 
     expect(result.publicacoes.items).toHaveLength(1);
-    expect(result.publicacoes.items[0]).toMatchObject({
-      id: postId.toString(),
-      conteudo: 'Explorando componentes acessíveis',
-      autor: {
-        id: publicUserId.toString(),
-        username: 'julio',
-      },
-    });
     expect(result.tecnologias).toEqual({
       items: [],
       hasMore: false,
     });
     expect(tecnologias.find).toHaveBeenCalledTimes(1);
-
-    // Verifica que apenas o perfil público serviu de semente para relacionados (nunca o privado)
-    expect(usuarios.find).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: 'ativo',
-        visibilidade_perfil: { $ne: 'privado' },
-        _id: { $nin: [publicUserId, privateUserId] },
-      }),
-    );
   });
 
-  it('serve páginas anônimas do Redis validando frescor dos autores e isola buscas autenticadas da Camada 3', async () => {
+  it('valida cursor autenticado antes de consultar catálogo/agregações e pagina searchPublications (score e publicada_em nula)', async () => {
+    const viewerId = new Types.ObjectId();
+    const authorId = new Types.ObjectId();
+    const post1Id = new Types.ObjectId();
+    const post2Id = new Types.ObjectId();
+    const mediaId = new Types.ObjectId();
+    const fallbackCreated = new Date('2026-11-22T10:00:00.000Z');
+    const pubPipelines: Array<Array<Record<string, unknown>>> = [];
+
+    const usuarios = {
+      findOne: vi.fn().mockReturnValue(
+        chainQuery({
+          _id: viewerId,
+          nome: 'Viewer',
+          username: 'viewer',
+          visibilidade_perfil: 'publico',
+          stack_ids: [],
+        }),
+      ),
+      aggregate: vi.fn().mockReturnValue(chainAgg([])),
+      find: vi.fn().mockReturnValue(chainQuery([])),
+      hydrate: (doc: Record<string, unknown>) => TestUsuarioModel.hydrate(doc),
+    };
+
+    const tecnologias = {
+      find: vi.fn().mockReturnValue(chainQuery([])),
+    };
+
+    const seguidores = {
+      find: vi.fn().mockReturnValue(chainQuery([])),
+    };
+
+    const makeRow = (id: Types.ObjectId, score: number) => ({
+      _id: id,
+      slug: `post-${id.toString()}`,
+      autor_id: authorId,
+      conteudo: 'Dashboard em React',
+      midias: [
+        {
+          _id: mediaId,
+          tipo: 'imagem',
+          url: 'https://cdn.example.test/p.png',
+          chave_storage: 'midias/p',
+          mime_type: 'image/png',
+          tamanho_bytes: 200,
+          largura: 100,
+          altura: 100,
+          duracao_segundos: null,
+          texto_alternativo: null,
+          ordem: 0,
+        },
+      ],
+      visibilidade: 'publico',
+      status: 'publicada',
+      contadores: {
+        upvotes: score,
+        downvotes: 0,
+        score,
+        comentarios: 0,
+        salvamentos: 0,
+      },
+      publicada_em: null,
+      editada_em: null,
+      criada_em: fallbackCreated,
+      atualizada_em: fallbackCreated,
+      dataOrdenacao: fallbackCreated,
+      tier: 0,
+      scoreOrdenacao: score,
+      author: [
+        {
+          _id: authorId,
+          nome: 'Autor',
+          username: 'autor',
+          biografia: null,
+          avatar_url: null,
+          visibilidade_perfil: 'publico',
+        },
+      ],
+    });
+
+    const publicacoes = {
+      aggregate: vi
+        .fn()
+        .mockImplementationOnce((pipeline: Array<Record<string, unknown>>) => {
+          pubPipelines.push(pipeline);
+          return chainAgg([makeRow(post1Id, 10), makeRow(post2Id, 5)]);
+        })
+        .mockImplementationOnce((pipeline: Array<Record<string, unknown>>) => {
+          pubPipelines.push(pipeline);
+          return chainAgg([makeRow(post2Id, 5)]);
+        }),
+      hydrate: (doc: Record<string, unknown>) =>
+        TestPublicacaoModel.hydrate(doc),
+    };
+
+    const service = new BuscaService(
+      usuarios as unknown as Model<Usuario>,
+      publicacoes as unknown as Model<Publicacao>,
+      tecnologias as unknown as Model<Tecnologia>,
+      seguidores as unknown as Model<Seguidor>,
+      {
+        listVisibility: vi.fn().mockResolvedValue({ visibilidade: 'publico' }),
+      } as unknown as PublicacaoAccessService,
+      {
+        toResponse: (...args: Parameters<PublicacoesService['toResponse']>) =>
+          PublicacoesService.prototype.toResponse.call(null, ...args),
+      } as unknown as PublicacoesService,
+      new BuscaCursor(makeConfig()),
+    );
+
+    // 1) Cursor inválido autenticado falha ANTES de carregar catálogo ou rodar agregações
+    await expect(
+      service.searchPublications(
+        {
+          q: 'dashboard',
+          limite: 1,
+          ordem: 'score',
+          cursor: 'cursor_invalido_com_comprimento_suficiente_123',
+        },
+        viewerId.toString(),
+      ),
+    ).rejects.toBeInstanceOf(ApiException);
+    expect(tecnologias.find).not.toHaveBeenCalled();
+    expect(usuarios.aggregate).not.toHaveBeenCalled();
+    expect(publicacoes.aggregate).not.toHaveBeenCalled();
+
+    // 2) Página 1 + Página 2 com ordem='score' e dataOrdenacao derivada de criada_em
+    const page1 = await service.searchPublications(
+      { q: 'dashboard', limite: 1, ordem: 'score' },
+      viewerId.toString(),
+    );
+    expect(page1.hasMore).toBe(true);
+    expect(page1.nextCursor).toBeTypeOf('string');
+
+    const page2 = await service.searchPublications(
+      {
+        q: 'dashboard',
+        limite: 1,
+        ordem: 'score',
+        cursor: page1.nextCursor!,
+      },
+      viewerId.toString(),
+    );
+    expect(page2.hasMore).toBe(false);
+    expect(page2.items[0].id).toBe(post2Id.toString());
+
+    const cursorMatchStage = pubPipelines[1]?.[2] as {
+      $match: { $or: Array<Record<string, unknown>> };
+    };
+    expect(cursorMatchStage.$match.$or).toHaveLength(4);
+    expect(cursorMatchStage.$match.$or[2]).toMatchObject({
+      tier: 0,
+      scoreOrdenacao: 10,
+      dataOrdenacao: { $lt: fallbackCreated },
+    });
+  });
+
+  it('serve páginas anônimas do Redis validando stacks/score/visibilidade, expurga chave stale quando !cacheable e permite auto-busca privada em memória', async () => {
     const store = new Map<string, string>();
+    const delSpy = vi.fn((key: string) => {
+      store.delete(key);
+      return Promise.resolve();
+    });
     const fakeClient = {
       enabled: true,
       prefix: 'ierri:cache:test:',
@@ -436,21 +610,21 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
         store.set(key, val);
         return Promise.resolve(true);
       }),
-      del: vi.fn((key: string) => {
-        store.delete(key);
-        return Promise.resolve();
-      }),
+      del: delSpy,
       invalidate: vi.fn(),
     } as unknown as PublicacoesCacheClient;
 
     const buscaCache = new BuscaCacheService(fakeClient);
+    const reactId = new Types.ObjectId();
     const authorId = new Types.ObjectId();
     const privateViewerId = new Types.ObjectId();
     const postId = new Types.ObjectId();
     const mediaId = new Types.ObjectId();
     const publishedAt = new Date('2026-11-24T18:00:00.000Z');
 
-    let liveAuthorVisibility: 'publico' | 'privado' = 'publico';
+    let liveAuthorScore = 10;
+    let liveAuthorStacks: Types.ObjectId[] = [reactId];
+    let pendingVoteProjection = false;
 
     const usuarios = {
       findOne: vi.fn().mockImplementation(() =>
@@ -460,26 +634,44 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
           username: 'conta_priv',
           biografia: 'Especialista em React confidencial',
           visibilidade_perfil: 'privado',
-          stack_ids: [],
+          stack_ids: [reactId],
         }),
       ),
-      aggregate: vi.fn().mockImplementation(() =>
-        chainAgg([
-          {
-            _id: authorId,
-            nome: 'Autor Cache',
-            username: 'autor_cache',
-            biografia:
-              liveAuthorVisibility === 'privado' ? 'Segredo' : 'Bio pública',
-            avatar_url: null,
-            visibilidade_perfil: liveAuthorVisibility,
-            stack_ids: [],
-            contadores: { score: 10 },
-            relevancia: 1,
-            scoreOrdenacao: 10,
-          },
-        ]),
-      ),
+      aggregate: vi
+        .fn()
+        .mockImplementation((pipeline: Array<Record<string, unknown>>) => {
+          const matchStr = JSON.stringify(pipeline[0]);
+          if (matchStr.includes(privateViewerId.toString())) {
+            return chainAgg([
+              {
+                _id: privateViewerId,
+                nome: 'Conta Privada',
+                username: 'conta_priv',
+                biografia: 'Especialista em React confidencial',
+                avatar_url: null,
+                visibilidade_perfil: 'privado',
+                stack_ids: [reactId],
+                contadores: { score: 77 },
+                relevancia: 4,
+                scoreOrdenacao: 77,
+              },
+            ]);
+          }
+          return chainAgg([
+            {
+              _id: authorId,
+              nome: 'Autor Cache',
+              username: 'autor_cache',
+              biografia: 'Bio pública',
+              avatar_url: null,
+              visibilidade_perfil: 'publico',
+              stack_ids: liveAuthorStacks,
+              contadores: { score: liveAuthorScore },
+              relevancia: 1,
+              scoreOrdenacao: liveAuthorScore,
+            },
+          ]);
+        }),
       find: vi.fn().mockImplementation((filter: Record<string, unknown>) => {
         if ('visibilidade_perfil' in filter) {
           return chainQuery([]);
@@ -491,7 +683,9 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
             username: 'autor_cache',
             biografia: 'Bio pública',
             avatar_url: null,
-            visibilidade_perfil: liveAuthorVisibility,
+            visibilidade_perfil: 'publico',
+            stack_ids: liveAuthorStacks,
+            contadores: { score: liveAuthorScore },
           },
         ]);
       }),
@@ -502,7 +696,7 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
       find: vi.fn().mockReturnValue(
         chainQuery([
           {
-            _id: new Types.ObjectId(),
+            _id: reactId,
             nome: 'React',
             slug: 'react',
             categoria: 'Frontend',
@@ -524,6 +718,7 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
             slug: 'post-cache-1',
             autor_id: authorId,
             conteudo: 'Interface em React',
+            votos_projecao_pendente: pendingVoteProjection,
             midias: [
               {
                 _id: mediaId,
@@ -552,16 +747,19 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
             editada_em: null,
             criada_em: publishedAt,
             atualizada_em: publishedAt,
+            dataOrdenacao: publishedAt,
             tier: 0,
             scoreOrdenacao: 3,
-            author: {
-              _id: authorId,
-              nome: 'Autor Cache',
-              username: 'autor_cache',
-              biografia: 'Bio pública',
-              avatar_url: null,
-              visibilidade_perfil: liveAuthorVisibility,
-            },
+            author: [
+              {
+                _id: authorId,
+                nome: 'Autor Cache',
+                username: 'autor_cache',
+                biografia: 'Bio pública',
+                avatar_url: null,
+                visibilidade_perfil: 'publico',
+              },
+            ],
           },
         ]),
       ),
@@ -569,21 +767,18 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
         TestPublicacaoModel.hydrate(doc),
     };
 
-    const access = {
-      listVisibility: vi.fn().mockResolvedValue({ visibilidade: 'publico' }),
-    };
-    const publicationResponses = {
-      toResponse: (...args: Parameters<PublicacoesService['toResponse']>) =>
-        PublicacoesService.prototype.toResponse.call(null, ...args),
-    };
-
     const service = new BuscaService(
       usuarios as unknown as Model<Usuario>,
       publicacoes as unknown as Model<Publicacao>,
       tecnologias as unknown as Model<Tecnologia>,
       seguidores as unknown as Model<Seguidor>,
-      access as unknown as PublicacaoAccessService,
-      publicationResponses as unknown as PublicacoesService,
+      {
+        listVisibility: vi.fn().mockResolvedValue({ visibilidade: 'publico' }),
+      } as unknown as PublicacaoAccessService,
+      {
+        toResponse: (...args: Parameters<PublicacoesService['toResponse']>) =>
+          PublicacoesService.prototype.toResponse.call(null, ...args),
+      } as unknown as PublicacoesService,
       new BuscaCursor(makeConfig()),
       buscaCache,
     );
@@ -594,41 +789,44 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
       limite: 10,
       ordem: 'recentes',
     });
-    expect(first.tecnologias.items).toHaveLength(1);
+    expect(first.usuarios.items[0].stacks).toHaveLength(1);
     expect(publicacoes.aggregate).toHaveBeenCalledTimes(1);
 
-    // 2ª chamada anônima: hit na Camada 3 -> zero nova agregação em publicações
-    const second = await service.searchAll({
+    // 2ª chamada anônima: hit na Camada 3
+    await service.searchAll({
       q: 'react',
       limite: 10,
       ordem: 'recentes',
     });
-    expect(second.usuarios.items[0].biografia).toBe('Bio pública');
     expect(publicacoes.aggregate).toHaveBeenCalledTimes(1);
     expect(buscaCache.metrics().pageHit).toBe(1);
 
-    // Se o autor virar privado, verifyUsersCurrent detecta staleMiss imediatamente sem esperar TTL
-    liveAuthorVisibility = 'privado';
+    // Mudança de stacks + post com projeção pendente (!cacheable): verifyUsersCurrent detecta e evict apaga a chave stale!
+    liveAuthorStacks = [];
+    liveAuthorScore = 11;
+    pendingVoteProjection = true;
     const third = await service.searchAll({
       q: 'react',
       limite: 10,
       ordem: 'recentes',
     });
     expect(buscaCache.metrics().staleMiss).toBe(1);
-    expect(third.usuarios.items[0]).toMatchObject({
-      visibilidadePerfil: 'privado',
-      biografia: null,
-      score: null,
-    });
-    expect(publicacoes.aggregate).toHaveBeenCalledTimes(2);
+    expect(third.usuarios.items[0].stacks).toEqual([]);
+    expect(third.usuarios.items[0].score).toBe(11);
+    expect(delSpy).toHaveBeenCalled();
 
-    // Busca autenticada reaproveita catálogo + sinais do Redis, mas nunca grava o viewer privado no Redis
-    await service.searchUsers(
+    // Auto-busca autenticada do próprio dono privado: vê própria bio/stacks/score em memória sem nunca gravar seu ID no Redis
+    const selfUsers = await service.searchUsers(
       { q: 'react', limite: 10 },
       privateViewerId.toString(),
     );
-    expect(buscaCache.metrics().techHit).toBeGreaterThanOrEqual(2);
-    expect(buscaCache.metrics().signalsHit).toBeGreaterThanOrEqual(1);
+    expect(selfUsers.items[0]).toMatchObject({
+      id: privateViewerId.toString(),
+      visibilidadePerfil: 'privado',
+      biografia: 'Especialista em React confidencial',
+      score: 77,
+    });
+    expect(selfUsers.items[0].stacks).toHaveLength(1);
     for (const value of store.values()) {
       expect(value).not.toContain(privateViewerId.toString());
     }

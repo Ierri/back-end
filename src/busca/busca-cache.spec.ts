@@ -1,6 +1,15 @@
 import { Types } from 'mongoose';
+import type { Model } from 'mongoose';
 import type { PublicacoesCacheClient } from '../publicacoes/publicacoes-cache.client.js';
 import { PublicacoesCacheService } from '../publicacoes/publicacoes-cache.service.js';
+import { TecnologiasService } from '../tecnologias/tecnologias.service.js';
+import { PerfilUpdateService } from '../usuarios/perfil-update.service.js';
+import type { Tecnologia } from '../usuarios/schemas/tecnologia.schema.js';
+import type {
+  Usuario,
+  UsuarioDocument,
+} from '../usuarios/schemas/usuario.schema.js';
+import { UsuariosStacksService } from '../usuarios/stacks.service.js';
 import { BuscaCacheService } from './busca-cache.service.js';
 
 const userId = '000000000000000000000011';
@@ -145,7 +154,7 @@ describe('BuscaCacheService', () => {
     };
   }
 
-  it('armazena, expira e expurga JSON corrompido ou payload privado indevido', async () => {
+  it('armazena, expurga via evict, rejeita JSON corrompido ou payload privado indevido e expira por TTL', async () => {
     const { client, buscaCache } = setup();
     const address = (await buscaCache.overviewAddress(
       'qhash',
@@ -157,6 +166,9 @@ describe('BuscaCacheService', () => {
     const overview = sampleOverview();
     await buscaCache.writeOverview(address, overview);
     expect(await buscaCache.readOverview(address)).toEqual(overview);
+
+    await buscaCache.evict(address);
+    expect(client.values.has(address.key)).toBe(false);
 
     // JSON corrompido deve ser apagado e tratado como miss
     client.values.set(address.key, { value: '{corrompido', expires: 30_000 });
@@ -173,7 +185,7 @@ describe('BuscaCacheService', () => {
     await buscaCache.writeOverview(address, leaked);
     expect(await buscaCache.readOverview(address)).toBeNull();
 
-    // Post com visibilidade != publico nunca é gravado
+    // Post com visibilidade != publico nunca é gravado (reutiliza cachedPublicacaoSchema)
     const followerPost = sampleOverview();
     (
       followerPost.publicacoes.items[0] as unknown as { visibilidade: string }
@@ -210,7 +222,7 @@ describe('BuscaCacheService', () => {
     expect(newTechs.key).not.toBe(oldTechs.key);
   });
 
-  it('isola chaves por página, cursor, limite e ordem, faz coalesce e falha aberto quando indisponível', async () => {
+  it('isola chaves, clona resultados concorrentes em coalesce sem compartilhar referências e falha aberto', async () => {
     const { client, buscaCache } = setup();
     const id = new Types.ObjectId(postId);
     const first = (await buscaCache.publicationsPageAddress(
@@ -227,24 +239,126 @@ describe('BuscaCacheService', () => {
     ))!;
     expect(first.key).not.toBe(ranked.key);
 
-    let release!: (val: string) => void;
-    const loader = vi.fn().mockImplementation(
+    let release!: (val: { tags: string[]; at: Date }) => void;
+    const loader = vi.fn(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<{ tags: string[]; at: Date }>((resolve) => {
           release = resolve;
         }),
     );
-    const concurrent = Array.from({ length: 8 }, () =>
-      buscaCache.coalesce('k1', loader),
-    );
+    const callA = buscaCache.coalesce('k1', loader);
+    const callB = buscaCache.coalesce('k1', loader);
     await Promise.resolve();
     expect(loader).toHaveBeenCalledOnce();
-    release('ok');
-    expect(await Promise.all(concurrent)).toEqual(Array(8).fill('ok'));
+    release({ tags: ['react'], at: new Date(publishedAt) });
+    const [resA, resB] = await Promise.all([callA, callB]);
+    resA.tags.push('mutado');
+    expect(resB.tags).toEqual(['react']);
+    expect(resB.at).toBeInstanceOf(Date);
 
     client.available = false;
     expect(await buscaCache.signalsAddress('qhash')).toBeNull();
     client.enabled = false;
     expect(await buscaCache.techCatalogAddress()).toBeNull();
+  });
+
+  it('integra invalidação em UsuariosStacksService, PerfilUpdateService e TecnologiasService sem quebrar em erros', async () => {
+    const { buscaCache, pubCache } = setup();
+
+    // 1) UsuariosStacksService.replace invalida generation:feed apenas em sucesso
+    const techObjId = new Types.ObjectId(techId);
+    const techQuery = {
+      select: vi.fn(),
+      limit: vi.fn(),
+      lean: vi.fn(),
+      exec: vi.fn().mockResolvedValue([{ _id: techObjId }]),
+    };
+    techQuery.select.mockReturnValue(techQuery);
+    techQuery.limit.mockReturnValue(techQuery);
+    techQuery.lean.mockReturnValue(techQuery);
+
+    const userQuery = {
+      select: vi.fn(),
+      lean: vi.fn(),
+      exec: vi
+        .fn()
+        .mockResolvedValueOnce({ stack_ids: [] })
+        .mockResolvedValueOnce({ stack_ids: [techObjId] })
+        .mockResolvedValueOnce({ stack_ids: [] }),
+    };
+    userQuery.select.mockReturnValue(userQuery);
+    userQuery.lean.mockReturnValue(userQuery);
+
+    const stacksService = new UsuariosStacksService(
+      {
+        findOne: vi.fn().mockReturnValue(userQuery),
+        findOneAndUpdate: vi.fn().mockReturnValue(userQuery),
+      } as unknown as Model<Usuario>,
+      {
+        find: vi.fn().mockReturnValue(techQuery),
+      } as unknown as Model<Tecnologia>,
+      pubCache,
+    );
+
+    const beforeStacks = (await buscaCache.signalsAddress('qhash'))!;
+    await stacksService.replace(userId, [techId]);
+    expect(await buscaCache.isCurrent(beforeStacks)).toBe(false);
+
+    // Erro de tecnologia inválida NÃO deve incrementar geração
+    const afterStacks = (await buscaCache.signalsAddress('qhash'))!;
+    techQuery.exec.mockResolvedValueOnce([]);
+    await expect(
+      stacksService.replace(userId, [new Types.ObjectId().toString()]),
+    ).rejects.toThrow();
+    expect(await buscaCache.isCurrent(afterStacks)).toBe(true);
+
+    // 2) PerfilUpdateService.update invalida generation:feed
+    const perfilService = new PerfilUpdateService({
+      findOneAndUpdate: vi.fn().mockReturnValue({
+        exec: vi
+          .fn()
+          .mockResolvedValue({ nome: 'Novo' } as unknown as UsuarioDocument),
+      }),
+    } as unknown as Model<Usuario>);
+    (perfilService as unknown as { cache: PublicacoesCacheService }).cache =
+      pubCache;
+    const beforeProfile = (await buscaCache.overviewAddress(
+      'qhash',
+      10,
+      'recentes',
+    ))!;
+    await perfilService.update(userId, { nome: 'Novo' });
+    expect(await buscaCache.isCurrent(beforeProfile)).toBe(false);
+
+    // 3) TecnologiasService.create e update invalidam generation:techs
+    const createdTechId = new Types.ObjectId();
+    const techModel = {
+      create: vi.fn().mockResolvedValue({
+        _id: createdTechId,
+        nome: 'Svelte',
+        slug: 'svelte',
+        categoria: 'Frontend',
+        icone_url: null,
+        ativo: true,
+      }),
+      findOneAndUpdate: vi.fn().mockReturnValue({
+        exec: vi.fn().mockResolvedValue({
+          _id: createdTechId,
+          nome: 'Svelte 5',
+          slug: 'svelte',
+          categoria: 'Frontend',
+          icone_url: null,
+          ativo: false,
+        }),
+      }),
+    } as unknown as Model<Tecnologia>;
+    const techService = new TecnologiasService(techModel, pubCache);
+    const beforeTechCreate = (await buscaCache.techCatalogAddress())!;
+    await techService.create({ nome: 'Svelte', slug: 'svelte' });
+    expect(await buscaCache.isCurrent(beforeTechCreate)).toBe(false);
+
+    const beforeTechUpdate = (await buscaCache.techCatalogAddress())!;
+    await techService.update(createdTechId.toString(), { ativo: false });
+    expect(await buscaCache.isCurrent(beforeTechUpdate)).toBe(false);
   });
 });

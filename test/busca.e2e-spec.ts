@@ -9,7 +9,9 @@ import type { Connection, Model } from 'mongoose';
 import { createClient } from 'redis';
 import request from 'supertest';
 import { AppModule } from '../src/app.module.js';
+import { BuscaCacheService } from '../src/busca/busca-cache.service.js';
 import { configureHttp } from '../src/common/http/configure-http.js';
+import { PublicacoesCacheClient } from '../src/publicacoes/publicacoes-cache.client.js';
 import { Publicacao } from '../src/publicacoes/schemas/publicacao.schema.js';
 import { Seguidor } from '../src/usuarios/schemas/seguidor.schema.js';
 import { Tecnologia } from '../src/usuarios/schemas/tecnologia.schema.js';
@@ -78,7 +80,7 @@ const servicesReady = config
 type Account = { id: string; username: string; token: string };
 
 describe.runIf(Boolean(config && servicesReady))(
-  'busca de perfis, publicações e relacionados (e2e)',
+  'busca de perfis, publicações, relacionados e cache Redis (e2e)',
   () => {
     let app: INestApplication;
     let connection: Connection;
@@ -86,6 +88,8 @@ describe.runIf(Boolean(config && servicesReady))(
     let publicacoes: Model<Publicacao>;
     let tecnologias: Model<Tecnologia>;
     let seguidores: Model<Seguidor>;
+    let cacheClient: PublicacoesCacheClient;
+    let buscaCache: BuscaCacheService;
     let inspector: ReturnType<typeof createClient>;
 
     let julio: Account;
@@ -110,6 +114,17 @@ describe.runIf(Boolean(config && servicesReady))(
     const auth = (account: Account) => ({
       Authorization: `Bearer ${account.token}`,
     });
+
+    const scanKeys = async (pattern: string) => {
+      const keys: string[] = [];
+      for await (const batch of inspector.scanIterator({
+        MATCH: pattern,
+        COUNT: 100,
+      })) {
+        keys.push(...batch);
+      }
+      return keys;
+    };
 
     const register = async (
       name: string,
@@ -199,6 +214,12 @@ describe.runIf(Boolean(config && servicesReady))(
       app = moduleRef.createNestApplication();
       configureHttp(app);
       await app.init();
+
+      cacheClient = moduleRef.get(PublicacoesCacheClient);
+      buscaCache = moduleRef.get(BuscaCacheService);
+      for (let attempt = 0; attempt < 30 && !cacheClient.ready; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
 
       connection = moduleRef.get<Connection>(getConnectionToken());
       usuarios = moduleRef.get<Model<Usuario>>(getModelToken(Usuario.name));
@@ -302,11 +323,12 @@ describe.runIf(Boolean(config && servicesReady))(
     });
 
     afterAll(async () => {
-      if (connection) {
-        await connection.dropDatabase().catch(() => undefined);
-      }
+      const db = connection?.db;
       if (app) {
         await app.close().catch(() => undefined);
+      }
+      if (db) {
+        await db.dropDatabase().catch(() => undefined);
       }
       if (inspector?.isReady) {
         for (const prefix of [
@@ -314,7 +336,7 @@ describe.runIf(Boolean(config && servicesReady))(
           config!.ratePrefix,
           config!.cachePrefix,
         ]) {
-          const keys = await inspector.keys(`${prefix}*`);
+          const keys = await scanKeys(`${prefix}*`);
           if (keys.length) await inspector.del(keys);
         }
         await inspector.close().catch(() => inspector.destroy());
@@ -364,11 +386,45 @@ describe.runIf(Boolean(config && servicesReady))(
       const postContents = pubsPage.items.map(
         (p: { conteudo: string }) => p.conteudo,
       );
-      // Direto do Júlio vem antes do post da criadora relacionada; oculto, seguidores e bloqueado não vazam!
       expect(postContents).toEqual([
         'Dashboard financeiro minimalista',
         'Biblioteca de botões acessíveis',
       ]);
+    });
+
+    it('exercita miss -> hit no cache Redis anônimo e invalida imediatamente ao atualizar perfil ou stacks', async () => {
+      const beforeHits = buscaCache.metrics().pageHit;
+      await request(server())
+        .get('/busca')
+        .query({ q: 'julio', limite: '10' })
+        .expect(200);
+      expect(buscaCache.metrics().pageHit).toBe(beforeHits + 1);
+
+      const keys = await scanKeys(`${config!.cachePrefix}busca:*`);
+      expect(keys.length).toBeGreaterThan(0);
+
+      // Troca de stacks via HTTP invalida generation:feed na hora
+      await request(server())
+        .put('/usuarios/me/stacks')
+        .set(auth(julio))
+        .send({ stackIds: [] })
+        .expect(200);
+
+      const afterStackChange = await request(server())
+        .get('/busca')
+        .query({ q: 'julio', limite: '10' })
+        .expect(200);
+      const julioAfter = afterStackChange.body.data.usuarios.items.find(
+        (u: { id: string }) => u.id === julio.id,
+      );
+      expect(julioAfter.stacks).toEqual([]);
+
+      // Restaura stack para os próximos testes
+      await request(server())
+        .put('/usuarios/me/stacks')
+        .set(auth(julio))
+        .send({ stackIds: [reactTechId.toString()] })
+        .expect(200);
     });
 
     it('impede vazamento por canal lateral (search oracle) de biografia privada e respeita posts para seguidores quando autenticado', async () => {
@@ -407,13 +463,11 @@ describe.runIf(Boolean(config && servicesReady))(
       expect(page2.body.data.items).toHaveLength(1);
       expect(page2.body.data.items[0].id).not.toBe(page1.body.data.items[0].id);
 
-      // Trocar query invalida o cursor
       await request(server())
         .get('/busca/usuarios')
         .query({ q: 'react', limite: '1', cursor: cursor1 })
         .expect(400);
 
-      // Reutilizar cursor anônimo autenticado invalida o cursor
       await request(server())
         .get('/busca/usuarios')
         .set(auth(follower))

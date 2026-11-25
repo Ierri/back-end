@@ -23,7 +23,11 @@ export type NormalizedSearchInput = {
 };
 
 export function stripAccents(value: string): string {
-  return value.normalize('NFD').replace(/\p{Diacritic}/gu, '');
+  return value.normalize('NFD').replace(/\p{M}/gu, '');
+}
+
+export function stripOrphanCombiningMarks(value: string): string {
+  return value.normalize('NFC').replace(/\p{M}/gu, '');
 }
 
 export function escapeRegexLiteral(value: string): string {
@@ -32,7 +36,7 @@ export function escapeRegexLiteral(value: string): string {
 
 export function buildDiacriticPattern(literal: string): string {
   let out = '';
-  for (const char of literal) {
+  for (const char of stripOrphanCombiningMarks(literal)) {
     const base = stripAccents(char).toLowerCase();
     const mapped = base.length === 1 ? DIACRITIC_CLASSES[base] : undefined;
     out += mapped ?? escapeRegexLiteral(char);
@@ -41,39 +45,59 @@ export function buildDiacriticPattern(literal: string): string {
 }
 
 export function normalizeSearchInput(raw: string): NormalizedSearchInput {
-  const collapsed = raw.trim().replace(/\s+/g, ' ');
-  const cleanText = collapsed.replace(/^@+/, '').trim();
-  const canonical = stripAccents(cleanText).toLowerCase();
-  const queryHash = createHash('sha256')
-    .update(canonical)
-    .digest('hex')
-    .slice(0, 32);
+  const sanitized = stripOrphanCombiningMarks(raw).trim().replace(/\s+/g, ' ');
+  const rawParts = sanitized.split(' ');
 
   const seenTokens = new Set<string>();
   const tokens: string[] = [];
-  for (const part of cleanText.split(' ')) {
+  for (const part of rawParts) {
     const cleaned = part.replace(/^@+/, '').trim();
     if (!cleaned) continue;
     const key = stripAccents(cleaned).toLowerCase();
-    if (seenTokens.has(key)) continue;
+    if (!key || seenTokens.has(key)) continue;
     seenTokens.add(key);
     tokens.push(cleaned);
     if (tokens.length >= MAX_SEARCH_TOKENS) break;
   }
 
-  const effectiveTokens = tokens.length ? tokens : [cleanText];
-  const singleRaw = cleanText.includes(' ') ? null : cleanText.toLowerCase();
+  const fallback = sanitized.replace(/@/g, '').trim();
+  const effectiveTokens = tokens.length ? tokens : fallback ? [fallback] : [];
+  const cleanText = effectiveTokens.join(' ');
+  const canonical = stripAccents(cleanText).toLowerCase();
+
+  const singleCanonical =
+    effectiveTokens.length === 1
+      ? stripAccents(effectiveTokens[0]).toLowerCase()
+      : null;
   const handleCandidate =
-    singleRaw && /^[a-z0-9_]{1,128}$/.test(singleRaw) ? singleRaw : null;
+    singleCanonical && /^[a-z0-9_]{1,128}$/.test(singleCanonical)
+      ? singleCanonical
+      : null;
 
   const phraseSource = buildDiacriticPattern(cleanText);
+  const prefixSource = `^${phraseSource}`;
+  const tokenSources = effectiveTokens.map((token) =>
+    buildDiacriticPattern(token),
+  );
+
+  const queryHash = createHash('sha256')
+    .update(
+      JSON.stringify({
+        h: handleCandidate,
+        p: prefixSource,
+        t: tokenSources,
+      }),
+    )
+    .digest('hex')
+    .slice(0, 32);
+
   return {
     cleanText,
     canonical,
     queryHash,
     handleCandidate,
     phraseSource,
-    prefixSource: `^${phraseSource}`,
-    tokenSources: effectiveTokens.map((token) => buildDiacriticPattern(token)),
+    prefixSource,
+    tokenSources,
   };
 }

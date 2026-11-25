@@ -63,6 +63,7 @@ const page = z.strictObject({
   hasMore: z.boolean(),
 });
 
+export { post as cachedPublicacaoSchema };
 export type CachedPublicacao = z.infer<typeof post>;
 export type CachedPublicacoesPage = z.infer<typeof page>;
 
