@@ -3,7 +3,10 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { AuthModule } from '../auth/auth.module.js';
 import { UsuariosModule } from '../usuarios/usuarios.module.js';
 import { Usuario, UsuarioSchema } from '../usuarios/schemas/usuario.schema.js';
-import { Seguidor, SeguidorSchema } from '../usuarios/schemas/seguidor.schema.js';
+import {
+  Seguidor,
+  SeguidorSchema,
+} from '../usuarios/schemas/seguidor.schema.js';
 import { MEDIA_VERIFIER } from './media-verifier.js';
 import { PublicacoesCacheClient } from './publicacoes-cache.client.js';
 import { PublicacoesCacheService } from './publicacoes-cache.service.js';
@@ -29,7 +32,10 @@ import { VideoProbeService } from './video-probe.service.js';
 import { Voto, VotoSchema } from './schemas/voto.schema.js';
 import { VotosController } from './votos.controller.js';
 import { VotosService } from './votos.service.js';
-import { PublicacaoSalva, PublicacaoSalvaSchema } from './schemas/publicacao-salva.schema.js';
+import {
+  PublicacaoSalva,
+  PublicacaoSalvaSchema,
+} from './schemas/publicacao-salva.schema.js';
 import { SalvosController } from './salvos.controller.js';
 import { SalvosCursor } from './salvos.cursor.js';
 import { SalvosService } from './salvos.service.js';
@@ -49,7 +55,12 @@ import { NotificationProducerModule } from '../notificacoes/notification-produce
       { name: PublicacaoSalva.name, schema: PublicacaoSalvaSchema },
     ]),
   ],
-  controllers: [PublicacoesController, MediaController, VotosController, SalvosController],
+  controllers: [
+    PublicacoesController,
+    MediaController,
+    VotosController,
+    SalvosController,
+  ],
   providers: [
     PublicacoesService,
     PublicacaoAccessService,
@@ -69,7 +80,14 @@ import { NotificationProducerModule } from '../notificacoes/notification-produce
     MediaCleanupService,
     { provide: MEDIA_VERIFIER, useClass: MongoMediaVerifierService },
   ],
-  exports: [OptionalAuthGuard, RequiredAuthGuard, PublicacoesCacheService, PublicacaoAccessService,
-    MediaStorageService, MediaInspectionService],
+  exports: [
+    OptionalAuthGuard,
+    RequiredAuthGuard,
+    PublicacoesCacheService,
+    PublicacaoAccessService,
+    PublicacoesService,
+    MediaStorageService,
+    MediaInspectionService,
+  ],
 })
 export class PublicacoesModule {}

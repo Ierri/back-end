@@ -1,0 +1,802 @@
+import { Inject, Injectable } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Types } from 'mongoose';
+import type { Model, PipelineStage } from 'mongoose';
+import { PublicacaoAccessService } from '../publicacoes/publicacao-access.service.js';
+import { PublicacoesService } from '../publicacoes/publicacoes.service.js';
+import { Publicacao } from '../publicacoes/schemas/publicacao.schema.js';
+import { Seguidor } from '../usuarios/schemas/seguidor.schema.js';
+import { Tecnologia } from '../usuarios/schemas/tecnologia.schema.js';
+import { Usuario } from '../usuarios/schemas/usuario.schema.js';
+import { normalizeSearchInput } from './busca-pattern.js';
+import type { NormalizedSearchInput } from './busca-pattern.js';
+import { BuscaCursor } from './busca.cursor.js';
+import type {
+  BuscaGeralDto,
+  BuscaOrder,
+  BuscaPublicacoesDto,
+  BuscaUsuariosDto,
+} from './dto/busca.dto.js';
+
+const QUERY_TIMEOUT_MS = 2_000;
+const MAX_TECH_SIGNALS = 10;
+const MAX_DIRECT_AUTHORS = 30;
+const MAX_SEED_PUBLIC_USERS = 3;
+const MAX_SEED_STACKS = 25;
+const MAX_SEED_CONNECTIONS = 40;
+const MAX_RELATED_USERS = 20;
+
+export type BuscaTecnologiaItem = {
+  id: string;
+  nome: string;
+  slug: string;
+  categoria: string | null;
+  iconeUrl: string | null;
+};
+
+export type BuscaUsuarioItem = {
+  id: string;
+  nome: string;
+  username: string;
+  avatarUrl: string | null;
+  biografia: string | null;
+  visibilidadePerfil: 'publico' | 'privado';
+  stacks: BuscaTecnologiaItem[];
+  score: number | null;
+  relacionado: boolean;
+};
+
+type DirectUserSeedRow = {
+  _id: Types.ObjectId;
+  visibilidade_perfil?: 'publico' | 'privado';
+  stack_ids?: Types.ObjectId[];
+};
+
+type UserSearchRow = {
+  _id: Types.ObjectId;
+  nome: string;
+  username: string;
+  biografia?: string;
+  avatar_url?: string;
+  visibilidade_perfil?: 'publico' | 'privado';
+  stack_ids?: Types.ObjectId[];
+  contadores?: { score?: number };
+  relevancia: number;
+  scoreOrdenacao: number;
+};
+
+type PublicationSearchRow = Publicacao & {
+  _id: Types.ObjectId;
+  tier: 0 | 1;
+  scoreOrdenacao: number;
+  author: Usuario & { _id: Types.ObjectId };
+};
+
+type SearchSignals = {
+  parsed: NormalizedSearchInput;
+  effectiveViewerId: string | undefined;
+  viewerObjectId: Types.ObjectId | null;
+  matchedTechnologies: Array<
+    Pick<Tecnologia, 'nome' | 'slug' | 'categoria' | 'icone_url'> & {
+      _id: Types.ObjectId;
+    }
+  >;
+  matchedTechIds: Types.ObjectId[];
+  directAuthorIds: Types.ObjectId[];
+  relatedPublicUserIds: Types.ObjectId[];
+};
+
+@Injectable()
+export class BuscaService {
+  constructor(
+    @InjectModel(Usuario.name) private readonly usuarios: Model<Usuario>,
+    @InjectModel(Publicacao.name)
+    private readonly publicacoes: Model<Publicacao>,
+    @InjectModel(Tecnologia.name)
+    private readonly tecnologias: Model<Tecnologia>,
+    @InjectModel(Seguidor.name) private readonly seguidores: Model<Seguidor>,
+    @Inject(PublicacaoAccessService)
+    private readonly access: PublicacaoAccessService,
+    @Inject(PublicacoesService)
+    private readonly publicationResponses: PublicacoesService,
+    @Inject(BuscaCursor) private readonly cursor: BuscaCursor,
+  ) {}
+
+  async searchAll(query: BuscaGeralDto, viewerId?: string) {
+    const signals = await this.resolveSignals(query.q, viewerId, query.limite);
+    const [usuarios, publicacoes] = await Promise.all([
+      this.executeUserSearch(signals, query.limite, null),
+      this.executePublicationSearch(signals, query.limite, query.ordem, null),
+    ]);
+    const hasMoreTech = signals.matchedTechnologies.length > query.limite;
+    const techSlice = signals.matchedTechnologies.slice(0, query.limite);
+
+    return {
+      usuarios,
+      publicacoes,
+      tecnologias: {
+        items: techSlice.map((tech) => this.toTechItem(tech)),
+        hasMore: hasMoreTech,
+      },
+    };
+  }
+
+  async searchUsers(query: BuscaUsuariosDto, viewerId?: string) {
+    const signals = await this.resolveSignals(query.q, viewerId, 0);
+    const position = query.cursor
+      ? this.cursor.decodeUsers(query.cursor, {
+          queryHash: signals.parsed.queryHash,
+          viewerId: signals.effectiveViewerId ?? null,
+        })
+      : null;
+    return this.executeUserSearch(signals, query.limite, position);
+  }
+
+  async searchPublications(query: BuscaPublicacoesDto, viewerId?: string) {
+    const signals = await this.resolveSignals(query.q, viewerId, 0);
+    const position = query.cursor
+      ? this.cursor.decodePublications(query.cursor, {
+          queryHash: signals.parsed.queryHash,
+          viewerId: signals.effectiveViewerId ?? null,
+          order: query.ordem,
+        })
+      : null;
+    return this.executePublicationSearch(
+      signals,
+      query.limite,
+      query.ordem,
+      position,
+    );
+  }
+
+  private async resolveActiveViewer(viewerId?: string): Promise<{
+    effectiveViewerId: string | undefined;
+    viewerObjectId: Types.ObjectId | null;
+  }> {
+    if (!viewerId || !/^[a-f\d]{24}$/i.test(viewerId)) {
+      return { effectiveViewerId: undefined, viewerObjectId: null };
+    }
+    const viewerObjectId = new Types.ObjectId(viewerId);
+    const active = await this.usuarios
+      .exists({ _id: viewerObjectId, status: 'ativo' })
+      .maxTimeMS(QUERY_TIMEOUT_MS)
+      .exec();
+    if (!active) {
+      return { effectiveViewerId: undefined, viewerObjectId: null };
+    }
+    return {
+      effectiveViewerId: viewerObjectId.toString(),
+      viewerObjectId,
+    };
+  }
+
+  private async resolveSignals(
+    rawQuery: string,
+    viewerId: string | undefined,
+    techPageLimit: number,
+  ): Promise<SearchSignals> {
+    const parsed = normalizeSearchInput(rawQuery);
+    const { effectiveViewerId, viewerObjectId } =
+      await this.resolveActiveViewer(viewerId);
+
+    const techLimit = Math.max(techPageLimit + 1, MAX_TECH_SIGNALS);
+    const matchedTechnologies = await this.tecnologias
+      .find({
+        ativo: true,
+        $and: parsed.tokenSources.map((src) => ({
+          $or: [
+            { nome: { $regex: src, $options: 'i' } },
+            { slug: { $regex: src, $options: 'i' } },
+            { categoria: { $regex: src, $options: 'i' } },
+          ],
+        })),
+      })
+      .select('_id nome slug categoria icone_url')
+      .sort({ nome: 1, _id: 1 })
+      .limit(techLimit)
+      .maxTimeMS(QUERY_TIMEOUT_MS)
+      .lean()
+      .exec();
+
+    const matchedTechIds = matchedTechnologies
+      .slice(0, MAX_TECH_SIGNALS)
+      .map((tech) => tech._id);
+
+    const directMatch = this.buildDirectUserMatch(
+      parsed,
+      matchedTechIds,
+      viewerObjectId,
+    );
+
+    const directSeeds = await this.usuarios
+      .aggregate<DirectUserSeedRow>([
+        { $match: directMatch },
+        {
+          $addFields: {
+            relevancia: this.buildUserRelevanceExpr(parsed, []),
+            scoreOrdenacao: { $ifNull: ['$contadores.score', 0] },
+          },
+        },
+        { $sort: { relevancia: 1, scoreOrdenacao: -1, _id: -1 } },
+        { $limit: MAX_DIRECT_AUTHORS },
+        {
+          $project: {
+            _id: 1,
+            visibilidade_perfil: 1,
+            stack_ids: 1,
+          },
+        },
+      ])
+      .option({ maxTimeMS: QUERY_TIMEOUT_MS })
+      .exec();
+
+    const directAuthorIds = directSeeds.map((seed) => seed._id);
+    const publicSeeds = directSeeds
+      .filter((seed) => (seed.visibilidade_perfil ?? 'publico') !== 'privado')
+      .slice(0, MAX_SEED_PUBLIC_USERS);
+
+    const relatedPublicUserIds = await this.findRelatedPublicUsers(
+      publicSeeds,
+      directAuthorIds,
+    );
+
+    return {
+      parsed,
+      effectiveViewerId,
+      viewerObjectId,
+      matchedTechnologies,
+      matchedTechIds,
+      directAuthorIds,
+      relatedPublicUserIds,
+    };
+  }
+
+  private async findRelatedPublicUsers(
+    publicSeeds: DirectUserSeedRow[],
+    excludeIds: Types.ObjectId[],
+  ): Promise<Types.ObjectId[]> {
+    if (!publicSeeds.length) return [];
+
+    const publicSeedIds = publicSeeds.map((seed) => seed._id);
+    const seedStackSet = new Map<string, Types.ObjectId>();
+    for (const seed of publicSeeds) {
+      for (const stackId of seed.stack_ids ?? []) {
+        const key = stackId.toString();
+        if (!seedStackSet.has(key)) {
+          seedStackSet.set(key, stackId);
+          if (seedStackSet.size >= MAX_SEED_STACKS) break;
+        }
+      }
+      if (seedStackSet.size >= MAX_SEED_STACKS) break;
+    }
+    const seedStackIds = [...seedStackSet.values()];
+
+    const relations = await this.seguidores
+      .find({
+        status: 'aceito',
+        $or: [
+          { seguidor_id: { $in: publicSeedIds } },
+          { seguido_id: { $in: publicSeedIds } },
+        ],
+      })
+      .sort({ aceito_em: -1, _id: -1 })
+      .limit(MAX_SEED_CONNECTIONS)
+      .select('seguidor_id seguido_id')
+      .maxTimeMS(QUERY_TIMEOUT_MS)
+      .lean()
+      .exec();
+
+    const seedIdStrings = new Set(publicSeedIds.map((id) => id.toString()));
+    const excludeStrings = new Set(excludeIds.map((id) => id.toString()));
+    const connectedMap = new Map<string, Types.ObjectId>();
+    for (const rel of relations) {
+      for (const candidate of [rel.seguidor_id, rel.seguido_id]) {
+        const key = candidate.toString();
+        if (!seedIdStrings.has(key) && !excludeStrings.has(key)) {
+          connectedMap.set(key, candidate);
+        }
+      }
+    }
+    const connectedIds = [...connectedMap.values()];
+
+    const relatedBranches: Array<Record<string, unknown>> = [];
+    if (seedStackIds.length) {
+      relatedBranches.push({ stack_ids: { $in: seedStackIds } });
+    }
+    if (connectedIds.length) {
+      relatedBranches.push({ _id: { $in: connectedIds } });
+    }
+    if (!relatedBranches.length) return [];
+
+    const relatedUsers = await this.usuarios
+      .find({
+        status: 'ativo',
+        visibilidade_perfil: { $ne: 'privado' },
+        ...(excludeIds.length ? { _id: { $nin: excludeIds } } : {}),
+        $or: relatedBranches,
+      })
+      .sort({ 'contadores.score': -1, _id: -1 })
+      .limit(MAX_RELATED_USERS)
+      .select('_id')
+      .maxTimeMS(QUERY_TIMEOUT_MS)
+      .lean()
+      .exec();
+
+    return relatedUsers.map((user) => user._id);
+  }
+
+  private buildDirectUserMatch(
+    parsed: NormalizedSearchInput,
+    matchedTechIds: Types.ObjectId[],
+    viewerObjectId: Types.ObjectId | null,
+  ): Record<string, unknown> {
+    const canSearchExtendedProfile = viewerObjectId
+      ? {
+          $or: [
+            { visibilidade_perfil: { $ne: 'privado' } },
+            { _id: viewerObjectId },
+          ],
+        }
+      : { visibilidade_perfil: { $ne: 'privado' } };
+
+    const identityMatch = {
+      $and: parsed.tokenSources.map((src) => ({
+        $or: [
+          { username: { $regex: src, $options: 'i' } },
+          { nome: { $regex: src, $options: 'i' } },
+        ],
+      })),
+    };
+
+    const bioMatch = {
+      $and: [
+        canSearchExtendedProfile,
+        ...parsed.tokenSources.map((src) => ({
+          biografia: { $regex: src, $options: 'i' },
+        })),
+      ],
+    };
+
+    const branches: Array<Record<string, unknown>> = [identityMatch, bioMatch];
+    if (matchedTechIds.length) {
+      branches.push({
+        $and: [
+          canSearchExtendedProfile,
+          { stack_ids: { $in: matchedTechIds } },
+        ],
+      });
+    }
+
+    return {
+      status: 'ativo',
+      $or: branches,
+    };
+  }
+
+  private buildUserRelevanceExpr(
+    parsed: NormalizedSearchInput,
+    relatedPublicUserIds: Types.ObjectId[],
+  ): Record<string, unknown> {
+    const fallback: number | Record<string, unknown> =
+      relatedPublicUserIds.length
+        ? { $cond: [{ $not: [{ $in: ['$_id', relatedPublicUserIds] }] }, 4, 5] }
+        : 4;
+
+    const tokensMatchExpr = {
+      $and: parsed.tokenSources.map((src) => ({
+        $or: [
+          {
+            $regexMatch: {
+              input: { $ifNull: ['$username', ''] },
+              regex: src,
+              options: 'i',
+            },
+          },
+          {
+            $regexMatch: {
+              input: { $ifNull: ['$nome', ''] },
+              regex: src,
+              options: 'i',
+            },
+          },
+        ],
+      })),
+    };
+
+    const fromTokens: Record<string, unknown> = {
+      $cond: [tokensMatchExpr, 3, fallback],
+    };
+    const fromNamePrefix: Record<string, unknown> = {
+      $cond: [
+        {
+          $regexMatch: {
+            input: { $ifNull: ['$nome', ''] },
+            regex: parsed.prefixSource,
+            options: 'i',
+          },
+        },
+        2,
+        fromTokens,
+      ],
+    };
+    const fromUserPrefix: Record<string, unknown> = {
+      $cond: [
+        {
+          $regexMatch: {
+            input: { $ifNull: ['$username', ''] },
+            regex: parsed.prefixSource,
+            options: 'i',
+          },
+        },
+        1,
+        fromNamePrefix,
+      ],
+    };
+
+    if (!parsed.handleCandidate) return fromUserPrefix;
+    return {
+      $cond: [
+        { $eq: ['$username', parsed.handleCandidate] },
+        0,
+        fromUserPrefix,
+      ],
+    };
+  }
+
+  private async executeUserSearch(
+    signals: SearchSignals,
+    limit: number,
+    position: { relevancia: number; score: number; id: Types.ObjectId } | null,
+  ) {
+    const directMatch = this.buildDirectUserMatch(
+      signals.parsed,
+      signals.matchedTechIds,
+      signals.viewerObjectId,
+    );
+
+    const matchCondition = signals.relatedPublicUserIds.length
+      ? {
+          status: 'ativo',
+          $or: [
+            directMatch,
+            {
+              visibilidade_perfil: { $ne: 'privado' },
+              _id: { $in: signals.relatedPublicUserIds },
+            },
+          ],
+        }
+      : directMatch;
+
+    const pipeline: PipelineStage[] = [
+      { $match: matchCondition },
+      {
+        $addFields: {
+          relevancia: this.buildUserRelevanceExpr(
+            signals.parsed,
+            signals.relatedPublicUserIds,
+          ),
+          scoreOrdenacao: { $ifNull: ['$contadores.score', 0] },
+        },
+      },
+      ...(position
+        ? [
+            {
+              $match: {
+                $or: [
+                  { relevancia: { $gt: position.relevancia } },
+                  {
+                    relevancia: position.relevancia,
+                    scoreOrdenacao: { $lt: position.score },
+                  },
+                  {
+                    relevancia: position.relevancia,
+                    scoreOrdenacao: position.score,
+                    _id: { $lt: position.id },
+                  },
+                ],
+              },
+            },
+          ]
+        : []),
+      { $sort: { relevancia: 1, scoreOrdenacao: -1, _id: -1 } },
+      { $limit: limit + 1 },
+      {
+        $project: {
+          _id: 1,
+          nome: 1,
+          username: 1,
+          biografia: 1,
+          avatar_url: 1,
+          visibilidade_perfil: 1,
+          stack_ids: 1,
+          'contadores.score': 1,
+          relevancia: 1,
+          scoreOrdenacao: 1,
+        },
+      },
+    ];
+
+    const found = await this.usuarios
+      .aggregate<UserSearchRow>(pipeline)
+      .option({ maxTimeMS: QUERY_TIMEOUT_MS })
+      .exec();
+
+    const hasMore = found.length > limit;
+    const page = found.slice(0, limit);
+    const last = page.at(-1);
+    const items = await this.formatUserItems(page, signals.viewerObjectId);
+
+    return {
+      items,
+      nextCursor:
+        hasMore && last
+          ? this.cursor.encodeUsers(
+              {
+                relevancia: last.relevancia,
+                score: last.scoreOrdenacao,
+                id: last._id,
+              },
+              {
+                queryHash: signals.parsed.queryHash,
+                viewerId: signals.effectiveViewerId ?? null,
+              },
+            )
+          : null,
+      hasMore,
+    };
+  }
+
+  private async formatUserItems(
+    rows: UserSearchRow[],
+    viewerObjectId: Types.ObjectId | null,
+  ): Promise<BuscaUsuarioItem[]> {
+    const neededStackIds = new Map<string, Types.ObjectId>();
+    for (const row of rows) {
+      const isPrivateForViewer =
+        (row.visibilidade_perfil ?? 'publico') === 'privado' &&
+        (!viewerObjectId || !row._id.equals(viewerObjectId));
+      if (isPrivateForViewer) continue;
+      for (const stackId of row.stack_ids ?? []) {
+        neededStackIds.set(stackId.toString(), stackId);
+      }
+    }
+
+    const techById = new Map<string, BuscaTecnologiaItem>();
+    if (neededStackIds.size > 0) {
+      const techs = await this.tecnologias
+        .find({
+          _id: { $in: [...neededStackIds.values()] },
+          ativo: true,
+        })
+        .select('_id nome slug categoria icone_url')
+        .maxTimeMS(QUERY_TIMEOUT_MS)
+        .lean()
+        .exec();
+      for (const tech of techs) {
+        techById.set(tech._id.toString(), this.toTechItem(tech));
+      }
+    }
+
+    return rows.map((row) => {
+      const visibility = row.visibilidade_perfil ?? 'publico';
+      const isPrivateForViewer =
+        visibility === 'privado' &&
+        (!viewerObjectId || !row._id.equals(viewerObjectId));
+
+      if (isPrivateForViewer) {
+        return {
+          id: row._id.toString(),
+          nome: row.nome,
+          username: row.username,
+          avatarUrl: row.avatar_url ?? null,
+          biografia: null,
+          visibilidadePerfil: 'privado',
+          stacks: [],
+          score: null,
+          relacionado: false,
+        };
+      }
+
+      return {
+        id: row._id.toString(),
+        nome: row.nome,
+        username: row.username,
+        avatarUrl: row.avatar_url ?? null,
+        biografia: row.biografia ?? null,
+        visibilidadePerfil: visibility,
+        stacks: (row.stack_ids ?? [])
+          .map((id) => techById.get(id.toString()))
+          .filter((tech): tech is BuscaTecnologiaItem => tech !== undefined),
+        score: row.contadores?.score ?? 0,
+        relacionado: row.relevancia === 5,
+      };
+    });
+  }
+
+  private async executePublicationSearch(
+    signals: SearchSignals,
+    limit: number,
+    order: BuscaOrder,
+    position: {
+      tier: 0 | 1;
+      publishedAt: Date;
+      score?: number;
+      id: Types.ObjectId;
+    } | null,
+  ) {
+    const visibility = await this.access.listVisibility(
+      signals.effectiveViewerId,
+    );
+
+    const contentMatch = {
+      $and: signals.parsed.tokenSources.map((src) => ({
+        conteudo: { $regex: src, $options: 'i' },
+      })),
+    };
+
+    const contentMatchExpr = {
+      $and: signals.parsed.tokenSources.map((src) => ({
+        $regexMatch: {
+          input: { $ifNull: ['$conteudo', ''] },
+          regex: src,
+          options: 'i',
+        },
+      })),
+    };
+
+    const orBranches: Array<Record<string, unknown>> = [contentMatch];
+    if (signals.directAuthorIds.length) {
+      orBranches.push({ autor_id: { $in: signals.directAuthorIds } });
+    }
+    if (signals.relatedPublicUserIds.length) {
+      orBranches.push({ autor_id: { $in: signals.relatedPublicUserIds } });
+    }
+
+    const directPostExprBranches: Array<Record<string, unknown>> = [
+      contentMatchExpr,
+    ];
+    if (signals.directAuthorIds.length) {
+      directPostExprBranches.push({
+        $in: ['$autor_id', signals.directAuthorIds],
+      });
+    }
+
+    const ranked = order === 'score';
+    const cursorMatch: Record<string, unknown> | null = position
+      ? ranked
+        ? {
+            $or: [
+              { tier: { $gt: position.tier } },
+              {
+                tier: position.tier,
+                scoreOrdenacao: { $lt: position.score! },
+              },
+              {
+                tier: position.tier,
+                scoreOrdenacao: position.score!,
+                publicada_em: { $lt: position.publishedAt },
+              },
+              {
+                tier: position.tier,
+                scoreOrdenacao: position.score!,
+                publicada_em: position.publishedAt,
+                _id: { $lt: position.id },
+              },
+            ],
+          }
+        : {
+            $or: [
+              { tier: { $gt: position.tier } },
+              {
+                tier: position.tier,
+                publicada_em: { $lt: position.publishedAt },
+              },
+              {
+                tier: position.tier,
+                publicada_em: position.publishedAt,
+                _id: { $lt: position.id },
+              },
+            ],
+          }
+      : null;
+
+    const pipeline: PipelineStage[] = [
+      {
+        $match: {
+          $and: [
+            { status: 'publicada' },
+            visibility as Record<string, unknown>,
+            { $or: orBranches },
+          ],
+        },
+      },
+      {
+        $addFields: {
+          tier: {
+            $cond: [{ $or: directPostExprBranches }, 0, 1],
+          },
+          scoreOrdenacao: { $ifNull: ['$contadores.score', 0] },
+        },
+      },
+      ...(cursorMatch ? [{ $match: cursorMatch }] : []),
+      {
+        $sort: ranked
+          ? { tier: 1, scoreOrdenacao: -1, publicada_em: -1, _id: -1 }
+          : { tier: 1, publicada_em: -1, _id: -1 },
+      },
+      {
+        $lookup: {
+          from: 'usuarios',
+          localField: 'autor_id',
+          foreignField: '_id',
+          pipeline: [
+            { $match: { status: 'ativo' } },
+            {
+              $project: {
+                _id: 1,
+                nome: 1,
+                username: 1,
+                biografia: 1,
+                avatar_url: 1,
+                visibilidade_perfil: 1,
+              },
+            },
+          ],
+          as: 'author',
+        },
+      },
+      { $unwind: '$author' },
+      { $limit: limit + 1 },
+    ];
+
+    const found = await this.publicacoes
+      .aggregate<PublicationSearchRow>(pipeline)
+      .option({ maxTimeMS: QUERY_TIMEOUT_MS })
+      .exec();
+
+    const hasMore = found.length > limit;
+    const page = found.slice(0, limit);
+    const last = page.at(-1);
+
+    return {
+      items: page.map((row) =>
+        this.publicationResponses.toResponse(
+          this.publicacoes.hydrate(row),
+          this.usuarios.hydrate(row.author),
+          signals.effectiveViewerId,
+        ),
+      ),
+      nextCursor:
+        hasMore && last
+          ? this.cursor.encodePublications(
+              {
+                tier: last.tier,
+                publishedAt: last.publicada_em ?? last.criada_em,
+                ...(ranked ? { score: last.scoreOrdenacao } : {}),
+                id: last._id,
+              },
+              {
+                queryHash: signals.parsed.queryHash,
+                viewerId: signals.effectiveViewerId ?? null,
+                order,
+              },
+            )
+          : null,
+      hasMore,
+    };
+  }
+
+  private toTechItem(
+    tech: Pick<Tecnologia, 'nome' | 'slug' | 'categoria' | 'icone_url'> & {
+      _id: Types.ObjectId;
+    },
+  ): BuscaTecnologiaItem {
+    return {
+      id: tech._id.toString(),
+      nome: tech.nome,
+      slug: tech.slug,
+      categoria: tech.categoria ?? null,
+      iconeUrl: tech.icone_url ?? null,
+    };
+  }
+}
