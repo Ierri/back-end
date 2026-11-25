@@ -83,6 +83,7 @@ import { NotificationProducerModule } from '../notificacoes/notification-produce
   exports: [
     OptionalAuthGuard,
     RequiredAuthGuard,
+    PublicacoesCacheClient,
     PublicacoesCacheService,
     PublicacaoAccessService,
     PublicacoesService,

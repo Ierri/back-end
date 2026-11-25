@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import type { Model, PipelineStage } from 'mongoose';
@@ -8,6 +8,8 @@ import { Publicacao } from '../publicacoes/schemas/publicacao.schema.js';
 import { Seguidor } from '../usuarios/schemas/seguidor.schema.js';
 import { Tecnologia } from '../usuarios/schemas/tecnologia.schema.js';
 import { Usuario } from '../usuarios/schemas/usuario.schema.js';
+import { BuscaCacheService } from './busca-cache.service.js';
+import type { CachedSearchPost } from './busca-cache.service.js';
 import { normalizeSearchInput } from './busca-pattern.js';
 import type { NormalizedSearchInput } from './busca-pattern.js';
 import { BuscaCursor } from './busca.cursor.js';
@@ -19,6 +21,7 @@ import type {
 } from './dto/busca.dto.js';
 
 const QUERY_TIMEOUT_MS = 2_000;
+const MAX_CATALOG_TECHS = 500;
 const MAX_TECH_SIGNALS = 10;
 const MAX_DIRECT_AUTHORS = 30;
 const MAX_SEED_PUBLIC_USERS = 3;
@@ -44,6 +47,24 @@ export type BuscaUsuarioItem = {
   stacks: BuscaTecnologiaItem[];
   score: number | null;
   relacionado: boolean;
+};
+
+type ViewerSnapshot = {
+  _id: Types.ObjectId;
+  nome: string;
+  username: string;
+  biografia?: string;
+  visibilidade_perfil?: 'publico' | 'privado';
+  stack_ids?: Types.ObjectId[];
+};
+
+type LiveUserSnapshot = {
+  _id: Types.ObjectId;
+  nome: string;
+  username: string;
+  biografia?: string;
+  avatar_url?: string;
+  visibilidade_perfil?: 'publico' | 'privado';
 };
 
 type DirectUserSeedRow = {
@@ -76,11 +97,8 @@ type SearchSignals = {
   parsed: NormalizedSearchInput;
   effectiveViewerId: string | undefined;
   viewerObjectId: Types.ObjectId | null;
-  matchedTechnologies: Array<
-    Pick<Tecnologia, 'nome' | 'slug' | 'categoria' | 'icone_url'> & {
-      _id: Types.ObjectId;
-    }
-  >;
+  techById: Map<string, BuscaTecnologiaItem>;
+  matchedTechnologies: BuscaTecnologiaItem[];
   matchedTechIds: Types.ObjectId[];
   directAuthorIds: Types.ObjectId[];
   relatedPublicUserIds: Types.ObjectId[];
@@ -100,32 +118,94 @@ export class BuscaService {
     @Inject(PublicacoesService)
     private readonly publicationResponses: PublicacoesService,
     @Inject(BuscaCursor) private readonly cursor: BuscaCursor,
+    @Optional()
+    @Inject(BuscaCacheService)
+    private readonly cache?: BuscaCacheService,
   ) {}
 
   async searchAll(query: BuscaGeralDto, viewerId?: string) {
-    const signals = await this.resolveSignals(query.q, viewerId, query.limite);
-    const [usuarios, publicacoes] = await Promise.all([
-      this.executeUserSearch(signals, query.limite, null),
-      this.executePublicationSearch(signals, query.limite, query.ordem, null),
-    ]);
-    const hasMoreTech = signals.matchedTechnologies.length > query.limite;
-    const techSlice = signals.matchedTechnologies.slice(0, query.limite);
-
-    return {
-      usuarios,
-      publicacoes,
-      tecnologias: {
-        items: techSlice.map((tech) => this.toTechItem(tech)),
-        hasMore: hasMoreTech,
-      },
-    };
+    const parsed = normalizeSearchInput(query.q);
+    if (!viewerId && this.cache?.enabled) {
+      const address = await this.cache.overviewAddress(
+        parsed.queryHash,
+        query.limite,
+        query.ordem,
+      );
+      if (address) {
+        const cached = await this.cache.readOverview(address);
+        if (cached) {
+          const valid =
+            (await this.verifyUsersCurrent(
+              cached.usuarios.items,
+              cached.publicacoes.items,
+            )) && (await this.cache.isCurrent(address));
+          if (valid) {
+            this.cache.countPageHit();
+            return cached;
+          }
+          this.cache.countStaleMiss();
+        }
+        return this.cache.coalesce(address.key, async () => {
+          const computed = await this.computeOverview(parsed, query, undefined);
+          if (computed.cacheable) {
+            await this.cache!.writeOverview(address, computed.response);
+          }
+          return computed.response;
+        });
+      }
+    }
+    return (await this.computeOverview(parsed, query, viewerId)).response;
   }
 
   async searchUsers(query: BuscaUsuariosDto, viewerId?: string) {
-    const signals = await this.resolveSignals(query.q, viewerId, 0);
+    const parsed = normalizeSearchInput(query.q);
+    if (!viewerId) {
+      const anonPosition = query.cursor
+        ? this.cursor.decodeUsers(query.cursor, {
+            queryHash: parsed.queryHash,
+            viewerId: null,
+          })
+        : null;
+
+      if (this.cache?.enabled) {
+        const address = await this.cache.usersPageAddress(
+          parsed.queryHash,
+          query.limite,
+          anonPosition,
+        );
+        if (address) {
+          const cached = await this.cache.readUsersPage(address);
+          if (cached) {
+            const valid =
+              (await this.verifyUsersCurrent(cached.items, [])) &&
+              (await this.cache.isCurrent(address));
+            if (valid) {
+              this.cache.countPageHit();
+              return cached;
+            }
+            this.cache.countStaleMiss();
+          }
+          return this.cache.coalesce(address.key, async () => {
+            const signals = await this.resolveSignals(parsed, undefined);
+            const page = await this.executeUserSearch(
+              signals,
+              query.limite,
+              anonPosition,
+            );
+            await this.cache!.writeUsersPage(address, page);
+            return page;
+          });
+        }
+      }
+
+      const signals = await this.resolveSignals(parsed, undefined);
+      return this.executeUserSearch(signals, query.limite, anonPosition);
+    }
+
+    const signals = await this.resolveSignals(parsed, viewerId);
     const position = query.cursor
       ? this.cursor.decodeUsers(query.cursor, {
-          queryHash: signals.parsed.queryHash,
+          queryHash: parsed.queryHash,
           viewerId: signals.effectiveViewerId ?? null,
         })
       : null;
@@ -133,84 +213,292 @@ export class BuscaService {
   }
 
   async searchPublications(query: BuscaPublicacoesDto, viewerId?: string) {
-    const signals = await this.resolveSignals(query.q, viewerId, 0);
+    const parsed = normalizeSearchInput(query.q);
+    if (!viewerId) {
+      const anonPosition = query.cursor
+        ? this.cursor.decodePublications(query.cursor, {
+            queryHash: parsed.queryHash,
+            viewerId: null,
+            order: query.ordem,
+          })
+        : null;
+
+      if (this.cache?.enabled) {
+        const address = await this.cache.publicationsPageAddress(
+          parsed.queryHash,
+          query.limite,
+          query.ordem,
+          anonPosition,
+        );
+        if (address) {
+          const cached = await this.cache.readPublicationsPage(address);
+          if (cached) {
+            const valid =
+              (await this.verifyUsersCurrent([], cached.items)) &&
+              (await this.cache.isCurrent(address));
+            if (valid) {
+              this.cache.countPageHit();
+              return cached;
+            }
+            this.cache.countStaleMiss();
+          }
+          return this.cache.coalesce(address.key, async () => {
+            const signals = await this.resolveSignals(parsed, undefined);
+            const computed = await this.executePublicationSearch(
+              signals,
+              query.limite,
+              query.ordem,
+              anonPosition,
+            );
+            if (computed.cacheable) {
+              await this.cache!.writePublicationsPage(address, computed.page);
+            }
+            return computed.page;
+          });
+        }
+      }
+
+      const signals = await this.resolveSignals(parsed, undefined);
+      return (
+        await this.executePublicationSearch(
+          signals,
+          query.limite,
+          query.ordem,
+          anonPosition,
+        )
+      ).page;
+    }
+
+    const signals = await this.resolveSignals(parsed, viewerId);
     const position = query.cursor
       ? this.cursor.decodePublications(query.cursor, {
-          queryHash: signals.parsed.queryHash,
+          queryHash: parsed.queryHash,
           viewerId: signals.effectiveViewerId ?? null,
           order: query.ordem,
         })
       : null;
-    return this.executePublicationSearch(
-      signals,
-      query.limite,
-      query.ordem,
-      position,
-    );
+    return (
+      await this.executePublicationSearch(
+        signals,
+        query.limite,
+        query.ordem,
+        position,
+      )
+    ).page;
+  }
+
+  private async computeOverview(
+    parsed: NormalizedSearchInput,
+    query: BuscaGeralDto,
+    viewerId: string | undefined,
+  ) {
+    const signals = await this.resolveSignals(parsed, viewerId);
+    const [usuarios, pubResult] = await Promise.all([
+      this.executeUserSearch(signals, query.limite, null),
+      this.executePublicationSearch(signals, query.limite, query.ordem, null),
+    ]);
+    const hasMoreTech = signals.matchedTechnologies.length > query.limite;
+    const techSlice = signals.matchedTechnologies.slice(0, query.limite);
+
+    return {
+      cacheable: !signals.effectiveViewerId && pubResult.cacheable,
+      response: {
+        usuarios,
+        publicacoes: pubResult.page,
+        tecnologias: {
+          items: techSlice,
+          hasMore: hasMoreTech,
+        },
+      },
+    };
   }
 
   private async resolveActiveViewer(viewerId?: string): Promise<{
     effectiveViewerId: string | undefined;
-    viewerObjectId: Types.ObjectId | null;
+    viewerDoc: ViewerSnapshot | null;
   }> {
     if (!viewerId || !/^[a-f\d]{24}$/i.test(viewerId)) {
-      return { effectiveViewerId: undefined, viewerObjectId: null };
+      return { effectiveViewerId: undefined, viewerDoc: null };
     }
     const viewerObjectId = new Types.ObjectId(viewerId);
-    const active = await this.usuarios
-      .exists({ _id: viewerObjectId, status: 'ativo' })
+    const viewerDoc = await this.usuarios
+      .findOne({ _id: viewerObjectId, status: 'ativo' })
+      .select('_id nome username biografia visibilidade_perfil stack_ids')
       .maxTimeMS(QUERY_TIMEOUT_MS)
+      .lean<ViewerSnapshot>()
       .exec();
-    if (!active) {
-      return { effectiveViewerId: undefined, viewerObjectId: null };
+    if (!viewerDoc) {
+      return { effectiveViewerId: undefined, viewerDoc: null };
     }
     return {
-      effectiveViewerId: viewerObjectId.toString(),
-      viewerObjectId,
+      effectiveViewerId: viewerDoc._id.toString(),
+      viewerDoc,
     };
   }
 
-  private async resolveSignals(
-    rawQuery: string,
-    viewerId: string | undefined,
-    techPageLimit: number,
-  ): Promise<SearchSignals> {
-    const parsed = normalizeSearchInput(rawQuery);
-    const { effectiveViewerId, viewerObjectId } =
-      await this.resolveActiveViewer(viewerId);
+  private async loadActiveTechCatalog(): Promise<BuscaTecnologiaItem[]> {
+    const address = await this.cache?.techCatalogAddress();
+    if (address && this.cache) {
+      const cached = await this.cache.readTechCatalog(address);
+      if (cached) {
+        this.cache.countTechHit();
+        return cached;
+      }
+      return this.cache.coalesce(address.key, async () => {
+        const fresh = await this.fetchActiveTechCatalogFromMongo();
+        await this.cache!.writeTechCatalog(address, fresh);
+        return fresh;
+      });
+    }
+    return this.fetchActiveTechCatalogFromMongo();
+  }
 
-    const techLimit = Math.max(techPageLimit + 1, MAX_TECH_SIGNALS);
-    const matchedTechnologies = await this.tecnologias
-      .find({
-        ativo: true,
-        $and: parsed.tokenSources.map((src) => ({
-          $or: [
-            { nome: { $regex: src, $options: 'i' } },
-            { slug: { $regex: src, $options: 'i' } },
-            { categoria: { $regex: src, $options: 'i' } },
-          ],
-        })),
-      })
+  private async fetchActiveTechCatalogFromMongo(): Promise<
+    BuscaTecnologiaItem[]
+  > {
+    const docs = await this.tecnologias
+      .find({ ativo: true })
       .select('_id nome slug categoria icone_url')
       .sort({ nome: 1, _id: 1 })
-      .limit(techLimit)
+      .limit(MAX_CATALOG_TECHS)
       .maxTimeMS(QUERY_TIMEOUT_MS)
       .lean()
       .exec();
+    return docs.map((tech) => this.toTechItem(tech));
+  }
 
+  private async resolveSignals(
+    parsed: NormalizedSearchInput,
+    viewerId: string | undefined,
+  ): Promise<SearchSignals> {
+    const [catalog, { effectiveViewerId, viewerDoc }] = await Promise.all([
+      this.loadActiveTechCatalog(),
+      this.resolveActiveViewer(viewerId),
+    ]);
+
+    const techById = new Map<string, BuscaTecnologiaItem>();
+    for (const tech of catalog) {
+      techById.set(tech.id, tech);
+    }
+
+    const tokenRegexes = parsed.tokenSources.map(
+      (source) => new RegExp(source, 'i'),
+    );
+    const matchedTechnologies = catalog.filter((tech) =>
+      tokenRegexes.every(
+        (re) =>
+          re.test(tech.nome) ||
+          re.test(tech.slug) ||
+          (tech.categoria !== null && re.test(tech.categoria)),
+      ),
+    );
     const matchedTechIds = matchedTechnologies
       .slice(0, MAX_TECH_SIGNALS)
-      .map((tech) => tech._id);
+      .map((tech) => new Types.ObjectId(tech.id));
 
-    const directMatch = this.buildDirectUserMatch(
+    const publicSignals = await this.resolvePublicSignals(
       parsed,
       matchedTechIds,
-      viewerObjectId,
+    );
+
+    let directAuthorIds = publicSignals.directAuthorIds;
+    if (
+      viewerDoc &&
+      (viewerDoc.visibilidade_perfil ?? 'publico') === 'privado' &&
+      !directAuthorIds.some((id) => id.equals(viewerDoc._id)) &&
+      this.viewerMatchesExtendedSearch(viewerDoc, tokenRegexes, matchedTechIds)
+    ) {
+      directAuthorIds = [viewerDoc._id, ...directAuthorIds].slice(
+        0,
+        MAX_DIRECT_AUTHORS,
+      );
+    }
+
+    return {
+      parsed,
+      effectiveViewerId,
+      viewerObjectId: viewerDoc?._id ?? null,
+      techById,
+      matchedTechnologies,
+      matchedTechIds,
+      directAuthorIds,
+      relatedPublicUserIds: publicSignals.relatedPublicUserIds,
+    };
+  }
+
+  private viewerMatchesExtendedSearch(
+    viewerDoc: ViewerSnapshot,
+    tokenRegexes: RegExp[],
+    matchedTechIds: Types.ObjectId[],
+  ): boolean {
+    const bio = viewerDoc.biografia ?? '';
+    if (bio && tokenRegexes.every((re) => re.test(bio))) {
+      return true;
+    }
+    if (!matchedTechIds.length || !viewerDoc.stack_ids?.length) {
+      return false;
+    }
+    const techSet = new Set(matchedTechIds.map((id) => id.toString()));
+    return viewerDoc.stack_ids.some((id) => techSet.has(id.toString()));
+  }
+
+  private async resolvePublicSignals(
+    parsed: NormalizedSearchInput,
+    matchedTechIds: Types.ObjectId[],
+  ): Promise<{
+    directAuthorIds: Types.ObjectId[];
+    relatedPublicUserIds: Types.ObjectId[];
+  }> {
+    const address = await this.cache?.signalsAddress(parsed.queryHash);
+    if (address && this.cache) {
+      const cached = await this.cache.readSignals(address);
+      if (cached) {
+        this.cache.countSignalsHit();
+        return {
+          directAuthorIds: cached.publicDirectAuthorIds.map(
+            (id) => new Types.ObjectId(id),
+          ),
+          relatedPublicUserIds: cached.relatedPublicUserIds.map(
+            (id) => new Types.ObjectId(id),
+          ),
+        };
+      }
+      return this.cache.coalesce(address.key, async () => {
+        const fresh = await this.computePublicSignalsFromMongo(
+          parsed,
+          matchedTechIds,
+        );
+        await this.cache!.writeSignals(address, {
+          matchedTechIds: matchedTechIds.map((id) => id.toString()),
+          publicDirectAuthorIds: fresh.directAuthorIds.map((id) =>
+            id.toString(),
+          ),
+          relatedPublicUserIds: fresh.relatedPublicUserIds.map((id) =>
+            id.toString(),
+          ),
+        });
+        return fresh;
+      });
+    }
+    return this.computePublicSignalsFromMongo(parsed, matchedTechIds);
+  }
+
+  private async computePublicSignalsFromMongo(
+    parsed: NormalizedSearchInput,
+    matchedTechIds: Types.ObjectId[],
+  ): Promise<{
+    directAuthorIds: Types.ObjectId[];
+    relatedPublicUserIds: Types.ObjectId[];
+  }> {
+    const publicDirectMatch = this.buildDirectUserMatch(
+      parsed,
+      matchedTechIds,
+      null,
     );
 
     const directSeeds = await this.usuarios
       .aggregate<DirectUserSeedRow>([
-        { $match: directMatch },
+        { $match: publicDirectMatch },
         {
           $addFields: {
             relevancia: this.buildUserRelevanceExpr(parsed, []),
@@ -240,15 +528,69 @@ export class BuscaService {
       directAuthorIds,
     );
 
-    return {
-      parsed,
-      effectiveViewerId,
-      viewerObjectId,
-      matchedTechnologies,
-      matchedTechIds,
-      directAuthorIds,
-      relatedPublicUserIds,
-    };
+    return { directAuthorIds, relatedPublicUserIds };
+  }
+
+  private async verifyUsersCurrent(
+    users: BuscaUsuarioItem[],
+    posts: CachedSearchPost[],
+  ): Promise<boolean> {
+    const idSet = new Set<string>();
+    for (const user of users) idSet.add(user.id.toLowerCase());
+    for (const post of posts) idSet.add(post.autor.id.toLowerCase());
+    if (idSet.size === 0) return true;
+
+    const objectIds = [...idSet].map((id) => new Types.ObjectId(id));
+    const liveUsers = await this.usuarios
+      .find({ _id: { $in: objectIds }, status: 'ativo' })
+      .select('_id nome username biografia avatar_url visibilidade_perfil')
+      .maxTimeMS(QUERY_TIMEOUT_MS)
+      .lean<LiveUserSnapshot[]>()
+      .exec();
+
+    if (liveUsers.length !== idSet.size) return false;
+    const byId = new Map<string, LiveUserSnapshot>();
+    for (const live of liveUsers) {
+      byId.set(live._id.toString().toLowerCase(), live);
+    }
+
+    for (const cachedUser of users) {
+      const live = byId.get(cachedUser.id.toLowerCase());
+      if (!live) return false;
+      const liveVis = live.visibilidade_perfil ?? 'publico';
+      if (
+        live.nome !== cachedUser.nome ||
+        live.username !== cachedUser.username ||
+        (live.avatar_url ?? null) !== cachedUser.avatarUrl ||
+        liveVis !== cachedUser.visibilidadePerfil
+      ) {
+        return false;
+      }
+      if (
+        liveVis === 'publico' &&
+        (live.biografia ?? null) !== cachedUser.biografia
+      ) {
+        return false;
+      }
+    }
+
+    for (const cachedPost of posts) {
+      const live = byId.get(cachedPost.autor.id.toLowerCase());
+      if (!live) return false;
+      const liveVis = live.visibilidade_perfil ?? 'publico';
+      const expectedBio =
+        liveVis === 'privado' ? null : (live.biografia ?? null);
+      if (
+        live.nome !== cachedPost.autor.nome ||
+        live.username !== cachedPost.autor.username ||
+        (live.avatar_url ?? null) !== cachedPost.autor.avatarUrl ||
+        expectedBio !== cachedPost.autor.biografia
+      ) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   private async findRelatedPublicUsers(
@@ -524,7 +866,11 @@ export class BuscaService {
     const hasMore = found.length > limit;
     const page = found.slice(0, limit);
     const last = page.at(-1);
-    const items = await this.formatUserItems(page, signals.viewerObjectId);
+    const items = this.formatUserItems(
+      page,
+      signals.viewerObjectId,
+      signals.techById,
+    );
 
     return {
       items,
@@ -546,37 +892,11 @@ export class BuscaService {
     };
   }
 
-  private async formatUserItems(
+  private formatUserItems(
     rows: UserSearchRow[],
     viewerObjectId: Types.ObjectId | null,
-  ): Promise<BuscaUsuarioItem[]> {
-    const neededStackIds = new Map<string, Types.ObjectId>();
-    for (const row of rows) {
-      const isPrivateForViewer =
-        (row.visibilidade_perfil ?? 'publico') === 'privado' &&
-        (!viewerObjectId || !row._id.equals(viewerObjectId));
-      if (isPrivateForViewer) continue;
-      for (const stackId of row.stack_ids ?? []) {
-        neededStackIds.set(stackId.toString(), stackId);
-      }
-    }
-
-    const techById = new Map<string, BuscaTecnologiaItem>();
-    if (neededStackIds.size > 0) {
-      const techs = await this.tecnologias
-        .find({
-          _id: { $in: [...neededStackIds.values()] },
-          ativo: true,
-        })
-        .select('_id nome slug categoria icone_url')
-        .maxTimeMS(QUERY_TIMEOUT_MS)
-        .lean()
-        .exec();
-      for (const tech of techs) {
-        techById.set(tech._id.toString(), this.toTechItem(tech));
-      }
-    }
-
+    techById: Map<string, BuscaTecnologiaItem>,
+  ): BuscaUsuarioItem[] {
     return rows.map((row) => {
       const visibility = row.visibilidade_perfil ?? 'publico';
       const isPrivateForViewer =
@@ -758,31 +1078,43 @@ export class BuscaService {
     const page = found.slice(0, limit);
     const last = page.at(-1);
 
+    const cacheable = page.every(
+      (row) =>
+        row.visibilidade === 'publico' &&
+        !row.votos_projecao_pendente &&
+        !row.votos_operacoes_pendentes?.length &&
+        !row.salvamentos_projecao_pendente &&
+        !row.salvamentos_operacoes_pendentes?.length,
+    );
+
     return {
-      items: page.map((row) =>
-        this.publicationResponses.toResponse(
-          this.publicacoes.hydrate(row),
-          this.usuarios.hydrate(row.author),
-          signals.effectiveViewerId,
+      cacheable,
+      page: {
+        items: page.map((row) =>
+          this.publicationResponses.toResponse(
+            this.publicacoes.hydrate(row),
+            this.usuarios.hydrate(row.author),
+            signals.effectiveViewerId,
+          ),
         ),
-      ),
-      nextCursor:
-        hasMore && last
-          ? this.cursor.encodePublications(
-              {
-                tier: last.tier,
-                publishedAt: last.publicada_em ?? last.criada_em,
-                ...(ranked ? { score: last.scoreOrdenacao } : {}),
-                id: last._id,
-              },
-              {
-                queryHash: signals.parsed.queryHash,
-                viewerId: signals.effectiveViewerId ?? null,
-                order,
-              },
-            )
-          : null,
-      hasMore,
+        nextCursor:
+          hasMore && last
+            ? this.cursor.encodePublications(
+                {
+                  tier: last.tier,
+                  publishedAt: last.publicada_em ?? last.criada_em,
+                  ...(ranked ? { score: last.scoreOrdenacao } : {}),
+                  id: last._id,
+                },
+                {
+                  queryHash: signals.parsed.queryHash,
+                  viewerId: signals.effectiveViewerId ?? null,
+                  order,
+                },
+              )
+            : null,
+        hasMore,
+      },
     };
   }
 

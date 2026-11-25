@@ -185,7 +185,7 @@ describe.runIf(Boolean(config && servicesReady))(
       process.env.MONGODB_URI = config!.mongo;
       process.env.REDIS_SESSION_PREFIX = config!.sessionPrefix;
       process.env.REDIS_CHECK_EMAIL_RATE_PREFIX = config!.ratePrefix;
-      process.env.REDIS_CACHE_ENABLED = 'false';
+      process.env.REDIS_CACHE_ENABLED = 'true';
       process.env.REDIS_CACHE_URL = redisBase;
       process.env.REDIS_CACHE_PREFIX = config!.cachePrefix;
 

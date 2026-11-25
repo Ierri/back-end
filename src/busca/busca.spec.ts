@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { ApiHttpModule } from '../common/http/api-http.module.js';
 import { ApiException } from '../common/http/api.exception.js';
 import { OptionalAuthGuard } from '../publicacoes/optional-auth.guard.js';
+import type { PublicacoesCacheClient } from '../publicacoes/publicacoes-cache.client.js';
 import { PublicacaoAccessService } from '../publicacoes/publicacao-access.service.js';
 import { PublicacoesService } from '../publicacoes/publicacoes.service.js';
 import type { Publicacao } from '../publicacoes/schemas/publicacao.schema.js';
@@ -15,6 +16,7 @@ import type { Seguidor } from '../usuarios/schemas/seguidor.schema.js';
 import type { Tecnologia } from '../usuarios/schemas/tecnologia.schema.js';
 import type { Usuario } from '../usuarios/schemas/usuario.schema.js';
 import { UsuarioSchema } from '../usuarios/schemas/usuario.schema.js';
+import { BuscaCacheService } from './busca-cache.service.js';
 import {
   MAX_SEARCH_TOKENS,
   buildDiacriticPattern,
@@ -275,10 +277,7 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
     };
 
     const tecnologias = {
-      find: vi
-        .fn()
-        .mockReturnValueOnce(chainQuery([techDoc]))
-        .mockReturnValueOnce(chainQuery([techDoc])),
+      find: vi.fn().mockReturnValue(chainQuery([techDoc])),
     };
 
     const seguidores = {
@@ -321,6 +320,7 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
             publicada_em: publishedAt,
             editada_em: null,
             criada_em: publishedAt,
+            atualizada_em: publishedAt,
             tier: 0,
             scoreOrdenacao: 9,
             author: {
@@ -409,17 +409,10 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
       },
     });
     expect(result.tecnologias).toEqual({
-      items: [
-        {
-          id: techId.toString(),
-          nome: 'React',
-          slug: 'react',
-          categoria: 'Frontend',
-          iconeUrl: '/brand/react.svg',
-        },
-      ],
+      items: [],
       hasMore: false,
     });
+    expect(tecnologias.find).toHaveBeenCalledTimes(1);
 
     // Verifica que apenas o perfil público serviu de semente para relacionados (nunca o privado)
     expect(usuarios.find).toHaveBeenCalledWith(
@@ -429,6 +422,216 @@ describe('BuscaService — privacidade, relacionados e paginação', () => {
         _id: { $nin: [publicUserId, privateUserId] },
       }),
     );
+  });
+
+  it('serve páginas anônimas do Redis validando frescor dos autores e isola buscas autenticadas da Camada 3', async () => {
+    const store = new Map<string, string>();
+    const fakeClient = {
+      enabled: true,
+      prefix: 'ierri:cache:test:',
+      searchTtl: 15,
+      techTtl: 300,
+      get: vi.fn((key: string) => Promise.resolve(store.get(key) ?? null)),
+      set: vi.fn((key: string, val: string) => {
+        store.set(key, val);
+        return Promise.resolve(true);
+      }),
+      del: vi.fn((key: string) => {
+        store.delete(key);
+        return Promise.resolve();
+      }),
+      invalidate: vi.fn(),
+    } as unknown as PublicacoesCacheClient;
+
+    const buscaCache = new BuscaCacheService(fakeClient);
+    const authorId = new Types.ObjectId();
+    const privateViewerId = new Types.ObjectId();
+    const postId = new Types.ObjectId();
+    const mediaId = new Types.ObjectId();
+    const publishedAt = new Date('2026-11-24T18:00:00.000Z');
+
+    let liveAuthorVisibility: 'publico' | 'privado' = 'publico';
+
+    const usuarios = {
+      findOne: vi.fn().mockImplementation(() =>
+        chainQuery({
+          _id: privateViewerId,
+          nome: 'Conta Privada',
+          username: 'conta_priv',
+          biografia: 'Especialista em React confidencial',
+          visibilidade_perfil: 'privado',
+          stack_ids: [],
+        }),
+      ),
+      aggregate: vi.fn().mockImplementation(() =>
+        chainAgg([
+          {
+            _id: authorId,
+            nome: 'Autor Cache',
+            username: 'autor_cache',
+            biografia:
+              liveAuthorVisibility === 'privado' ? 'Segredo' : 'Bio pública',
+            avatar_url: null,
+            visibilidade_perfil: liveAuthorVisibility,
+            stack_ids: [],
+            contadores: { score: 10 },
+            relevancia: 1,
+            scoreOrdenacao: 10,
+          },
+        ]),
+      ),
+      find: vi.fn().mockImplementation((filter: Record<string, unknown>) => {
+        if ('visibilidade_perfil' in filter) {
+          return chainQuery([]);
+        }
+        return chainQuery([
+          {
+            _id: authorId,
+            nome: 'Autor Cache',
+            username: 'autor_cache',
+            biografia: 'Bio pública',
+            avatar_url: null,
+            visibilidade_perfil: liveAuthorVisibility,
+          },
+        ]);
+      }),
+      hydrate: (doc: Record<string, unknown>) => TestUsuarioModel.hydrate(doc),
+    };
+
+    const tecnologias = {
+      find: vi.fn().mockReturnValue(
+        chainQuery([
+          {
+            _id: new Types.ObjectId(),
+            nome: 'React',
+            slug: 'react',
+            categoria: 'Frontend',
+            icone_url: null,
+          },
+        ]),
+      ),
+    };
+
+    const seguidores = {
+      find: vi.fn().mockReturnValue(chainQuery([])),
+    };
+
+    const publicacoes = {
+      aggregate: vi.fn().mockImplementation(() =>
+        chainAgg([
+          {
+            _id: postId,
+            slug: 'post-cache-1',
+            autor_id: authorId,
+            conteudo: 'Interface em React',
+            midias: [
+              {
+                _id: mediaId,
+                tipo: 'imagem',
+                url: 'https://cdn.example.test/cache1.png',
+                chave_storage: 'midias/c1',
+                mime_type: 'image/png',
+                tamanho_bytes: 500,
+                largura: 400,
+                altura: 300,
+                duracao_segundos: null,
+                texto_alternativo: null,
+                ordem: 0,
+              },
+            ],
+            visibilidade: 'publico',
+            status: 'publicada',
+            contadores: {
+              upvotes: 3,
+              downvotes: 0,
+              score: 3,
+              comentarios: 0,
+              salvamentos: 0,
+            },
+            publicada_em: publishedAt,
+            editada_em: null,
+            criada_em: publishedAt,
+            atualizada_em: publishedAt,
+            tier: 0,
+            scoreOrdenacao: 3,
+            author: {
+              _id: authorId,
+              nome: 'Autor Cache',
+              username: 'autor_cache',
+              biografia: 'Bio pública',
+              avatar_url: null,
+              visibilidade_perfil: liveAuthorVisibility,
+            },
+          },
+        ]),
+      ),
+      hydrate: (doc: Record<string, unknown>) =>
+        TestPublicacaoModel.hydrate(doc),
+    };
+
+    const access = {
+      listVisibility: vi.fn().mockResolvedValue({ visibilidade: 'publico' }),
+    };
+    const publicationResponses = {
+      toResponse: (...args: Parameters<PublicacoesService['toResponse']>) =>
+        PublicacoesService.prototype.toResponse.call(null, ...args),
+    };
+
+    const service = new BuscaService(
+      usuarios as unknown as Model<Usuario>,
+      publicacoes as unknown as Model<Publicacao>,
+      tecnologias as unknown as Model<Tecnologia>,
+      seguidores as unknown as Model<Seguidor>,
+      access as unknown as PublicacaoAccessService,
+      publicationResponses as unknown as PublicacoesService,
+      new BuscaCursor(makeConfig()),
+      buscaCache,
+    );
+
+    // 1ª chamada anônima: miss -> popula Camadas 1, 2 e 3
+    const first = await service.searchAll({
+      q: 'react',
+      limite: 10,
+      ordem: 'recentes',
+    });
+    expect(first.tecnologias.items).toHaveLength(1);
+    expect(publicacoes.aggregate).toHaveBeenCalledTimes(1);
+
+    // 2ª chamada anônima: hit na Camada 3 -> zero nova agregação em publicações
+    const second = await service.searchAll({
+      q: 'react',
+      limite: 10,
+      ordem: 'recentes',
+    });
+    expect(second.usuarios.items[0].biografia).toBe('Bio pública');
+    expect(publicacoes.aggregate).toHaveBeenCalledTimes(1);
+    expect(buscaCache.metrics().pageHit).toBe(1);
+
+    // Se o autor virar privado, verifyUsersCurrent detecta staleMiss imediatamente sem esperar TTL
+    liveAuthorVisibility = 'privado';
+    const third = await service.searchAll({
+      q: 'react',
+      limite: 10,
+      ordem: 'recentes',
+    });
+    expect(buscaCache.metrics().staleMiss).toBe(1);
+    expect(third.usuarios.items[0]).toMatchObject({
+      visibilidadePerfil: 'privado',
+      biografia: null,
+      score: null,
+    });
+    expect(publicacoes.aggregate).toHaveBeenCalledTimes(2);
+
+    // Busca autenticada reaproveita catálogo + sinais do Redis, mas nunca grava o viewer privado no Redis
+    await service.searchUsers(
+      { q: 'react', limite: 10 },
+      privateViewerId.toString(),
+    );
+    expect(buscaCache.metrics().techHit).toBeGreaterThanOrEqual(2);
+    expect(buscaCache.metrics().signalsHit).toBeGreaterThanOrEqual(1);
+    for (const value of store.values()) {
+      expect(value).not.toContain(privateViewerId.toString());
+    }
   });
 });
 

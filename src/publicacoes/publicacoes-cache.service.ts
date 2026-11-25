@@ -194,6 +194,16 @@ export class PublicacoesCacheService {
     return success;
   }
 
+  async invalidateTechnologies() {
+    if (!this.client.enabled) return true;
+    const success = await this.client.invalidate([
+      `${this.client.prefix}generation:techs`,
+    ]);
+    if (success) this.counters.invalidation++;
+    else this.counters.error++;
+    return success;
+  }
+
   async coalesce<T>(key: string, load: () => Promise<T>): Promise<T> {
     const current = this.pending.get(key);
     if (current) return current as Promise<T>;
