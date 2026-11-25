@@ -22,6 +22,7 @@ export class MongoMediaVerifierService implements MediaVerifier {
     authorId: string,
     references: readonly string[],
     publicationId: string,
+    editing = false,
   ): Promise<VerifiedMedia[]> {
     if (
       references.length < 1 ||
@@ -80,7 +81,7 @@ export class MongoMediaVerifierService implements MediaVerifier {
       }
       return verified;
     } catch (error) {
-      await this.releaseForPublication(publicationId, claimed).catch(
+      await this.releaseForPublication(publicationId, claimed, editing).catch(
         () => undefined,
       );
       throw error;
@@ -114,10 +115,11 @@ export class MongoMediaVerifierService implements MediaVerifier {
   async releaseForPublication(
     publicationId: string,
     references: readonly string[],
+    editing = false,
   ) {
     if (!references.length) return;
     const publication = new Types.ObjectId(publicationId);
-    if (await this.publications.exists({ _id: publication }).exec()) return;
+    if (!editing && await this.publications.exists({ _id: publication }).exec()) return;
     await this.uploads
       .updateMany(
         {

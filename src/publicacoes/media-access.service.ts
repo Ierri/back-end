@@ -60,6 +60,7 @@ export class MediaAccessService {
     const publication = await this.publications
       .findOne({
         _id: media.publicacao_id,
+        'midias.chave_storage': media.chave_storage,
         status: 'publicada',
       })
       .exec();

@@ -20,7 +20,7 @@ import type {
   CachedPublicacoesPage,
 } from './publicacoes-cache.service.js';
 import { MEDIA_VERIFIER } from './media-verifier.js';
-import type { MediaVerifier } from './media-verifier.js';
+import type { MediaVerifier, VerifiedMedia } from './media-verifier.js';
 import { PublicacoesCursor } from './publicacoes.cursor.js';
 import {
   Publicacao,
@@ -209,6 +209,20 @@ export class PublicacoesService {
     };
   }
 
+  private async resolveStacks(stackIds: string[]) {
+    const catalog = stackIds.length
+      ? await this.tecnologias.find({ _id: { $in: stackIds }, ativo: true })
+        .select('slug nome categoria icone_url').lean().exec()
+      : [];
+    if (catalog.length !== stackIds.length) throw new ApiException('TECNOLOGIAS_INVALIDAS');
+    const byId = new Map(catalog.map((item) => [item._id.toString(), item]));
+    return stackIds.map((id) => {
+      const item = byId.get(id)!;
+      return { id, slug: item.slug, nome: item.nome,
+        categoria: item.categoria ?? null, iconeUrl: item.icone_url ?? null };
+    });
+  }
+
   async create(authorId: string, body: CreatePublicacaoDto) {
     const author = await this.usuarios
       .findById(authorId)
@@ -216,18 +230,7 @@ export class PublicacoesService {
       .exec();
     if (!author) throw new ApiException('AUTH_REQUIRED');
 
-    const stackIds = body.stackIds ?? [];
-    const catalog = stackIds.length
-      ? await this.tecnologias.find({ _id: { $in: stackIds }, ativo: true })
-        .select('slug nome categoria icone_url').lean().exec()
-      : [];
-    if (catalog.length !== stackIds.length) throw new ApiException('TECNOLOGIAS_INVALIDAS');
-    const byId = new Map(catalog.map((item) => [item._id.toString(), item]));
-    const stacks = stackIds.map((id) => {
-      const item = byId.get(id)!;
-      return { id, slug: item.slug, nome: item.nome,
-        categoria: item.categoria ?? null, iconeUrl: item.icone_url ?? null };
-    });
+    const stacks = await this.resolveStacks(body.stackIds ?? []);
 
     const publicationId = new Types.ObjectId();
     const verified = await this.mediaVerifier.resolveForPublication(
@@ -244,19 +247,7 @@ export class PublicacoesService {
       ) {
         throw new ApiException('MEDIA_INVALID');
       }
-      const midias: PublicacaoMidia[] = verified.map((media, ordem) => ({
-        _id: new Types.ObjectId(),
-        tipo: media.tipo,
-        url: media.url,
-        chave_storage: media.chave_storage,
-        mime_type: media.mime_type,
-        tamanho_bytes: media.tamanho_bytes,
-        largura: media.largura,
-        altura: media.altura,
-        duracao_segundos: media.duracao_segundos,
-        texto_alternativo: null,
-        ordem,
-      }));
+      const midias = verified.map((media, ordem) => this.toPublicationMedia(media, ordem));
       if (!validPublicationMedia(midias))
         throw new ApiException('MEDIA_INVALID');
 
@@ -463,26 +454,94 @@ export class PublicacoesService {
     return valid ? byAuthor : null;
   }
 
+  private toPublicationMedia(media: VerifiedMedia, ordem: number): PublicacaoMidia {
+    return {
+      _id: new Types.ObjectId(),
+      tipo: media.tipo,
+      url: media.url,
+      chave_storage: media.chave_storage,
+      mime_type: media.mime_type,
+      tamanho_bytes: media.tamanho_bytes,
+      largura: media.largura,
+      altura: media.altura,
+      duracao_segundos: media.duracao_segundos,
+      texto_alternativo: null,
+      ordem,
+    };
+  }
+
   async update(id: string, authorId: string, body: UpdatePublicacaoDto) {
+    const filter = { _id: id, autor_id: new Types.ObjectId(authorId), status: 'publicada' as const };
     const changes: Record<string, unknown> = {};
-    if (body.conteudo !== undefined) {
-      changes.conteudo = body.conteudo;
+    if (body.conteudo !== undefined) changes.conteudo = body.conteudo;
+    if (body.visibilidade !== undefined) changes.visibilidade = body.visibilidade;
+    if (body.conteudo !== undefined || body.stackIds !== undefined || body.midias !== undefined)
       changes.editada_em = new Date();
-    }
-    if (body.visibilidade !== undefined)
-      changes.visibilidade = body.visibilidade;
-    const publication = await this.publicacoes
-      .findOneAndUpdate(
+    if (body.stackIds !== undefined) changes.stacks = await this.resolveStacks(body.stackIds);
+
+    const references = body.midias?.flatMap((item) => 'referencia' in item ? [item.referencia] : []) ?? [];
+    const publicationId = id.toLowerCase();
+    let previousMediaIds: Types.ObjectId[] | undefined;
+    let reservedReferences: string[] = [];
+    let writeStarted = false;
+    let publication: PublicacaoDocument | null;
+    try {
+      if (body.midias) {
+        const current = await this.publicacoes.findOne(filter).exec();
+        if (!current) throw new ApiException('PUBLICACAO_NOT_FOUND');
+        previousMediaIds = current.midias.map((item) => item._id);
+        const existing = new Map(current.midias.map((item) => [item._id.toString(), item]));
+        if (body.midias.some((item) => 'id' in item && !existing.has(item.id)))
+          throw new ApiException('MEDIA_INVALID');
+
+        const uploads = references.length
+          ? await this.mediaVerifier.resolveForPublication(authorId, references, publicationId, true)
+          : [];
+        reservedReferences = uploads.map((item) => item.referencia);
+        const uploaded = new Map(uploads.map((item) => [item.referencia, item]));
+        const midias = body.midias.map((item, order) => {
+          if ('referencia' in item) {
+            const upload = uploaded.get(item.referencia);
+            if (!upload) throw new ApiException('MEDIA_INVALID');
+            return this.toPublicationMedia(upload, order);
+          }
+          const media = existing.get(item.id)!;
+          return {
+            _id: media._id, tipo: media.tipo, url: media.url,
+            chave_storage: media.chave_storage, mime_type: media.mime_type,
+            tamanho_bytes: media.tamanho_bytes, largura: media.largura,
+            altura: media.altura, duracao_segundos: media.duracao_segundos,
+            texto_alternativo: media.texto_alternativo, ordem: order,
+          };
+        });
+        if (!validPublicationMedia(midias)) throw new ApiException('MEDIA_INVALID');
+        changes.midias = midias;
+        if (references.length) await this.mediaVerifier.confirmForPublication(publicationId, references);
+      }
+
+      writeStarted = true;
+      publication = await this.publicacoes.findOneAndUpdate(
         {
-          _id: id,
-          autor_id: new Types.ObjectId(authorId),
-          status: 'publicada',
+          ...filter,
+          ...(previousMediaIds ? { $expr: { $eq: ['$midias._id', previousMediaIds] } } : {}),
         },
         { $set: changes },
         { new: true, runValidators: true },
-      )
-      .exec();
-    if (!publication) throw new ApiException('PUBLICACAO_NOT_FOUND');
+      ).exec();
+      if (!publication) {
+        writeStarted = false;
+        throw new ApiException(previousMediaIds ? 'MEDIA_INVALID' : 'PUBLICACAO_NOT_FOUND');
+      }
+    } catch (error) {
+      if (!writeStarted && reservedReferences.length) {
+        await this.mediaVerifier.releaseForPublication(publicationId, reservedReferences, true).catch(() => undefined);
+      }
+      throw error;
+    }
+
+    if (references.length) {
+      await this.mediaVerifier.finalizeForPublication(publicationId, references).catch(() => undefined);
+    }
     await this.cache.invalidate(id, authorId);
     if (body.visibilidade !== undefined)
       await this.creatorStats?.refresh(authorId).catch(() => undefined);

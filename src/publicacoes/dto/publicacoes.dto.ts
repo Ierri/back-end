@@ -29,11 +29,13 @@ export const publicationStacksSchema = z.array(z.strictObject({
   iconeUrl: z.string().nullable(),
 })).max(20);
 
+const stackIdsSchema = z.array(publicacaoIdSchema.transform((id) => id.toLowerCase())).max(20)
+  .refine((ids) => new Set(ids).size === ids.length);
+
 export const createPublicacaoSchema = z.strictObject({
   conteudo: z.string().trim().min(1),
   visibilidade: z.enum(['publico', 'seguidores']).default('publico'),
-  stackIds: z.array(publicacaoIdSchema.transform((id) => id.toLowerCase())).max(20)
-    .refine((ids) => new Set(ids).size === ids.length).optional(),
+  stackIds: stackIdsSchema.optional(),
   midias: z
     .array(mediaReferenceSchema)
     .min(1)
@@ -45,6 +47,13 @@ export const updatePublicacaoSchema = z
   .strictObject({
     conteudo: z.string().trim().min(1).optional(),
     visibilidade: z.enum(['publico', 'seguidores']).optional(),
+    stackIds: stackIdsSchema.optional(),
+    midias: z.array(z.union([
+      z.strictObject({ id: publicacaoIdSchema.transform((id) => id.toLowerCase()) }),
+      z.strictObject({ referencia: mediaReferenceSchema }),
+    ])).min(1).max(10)
+      .refine((items) => new Set(items.map((item) => 'id' in item ? item.id : item.referencia)).size === items.length)
+      .optional(),
   })
   .refine((body) => Object.keys(body).length > 0);
 

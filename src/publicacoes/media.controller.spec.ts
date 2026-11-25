@@ -117,6 +117,7 @@ describe('MediaController multipart contract', () => {
       'valid-reference-123',
       undefined,
       'bytes=10-19',
+      undefined,
     );
   });
 
