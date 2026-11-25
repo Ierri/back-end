@@ -144,7 +144,7 @@ describe('modelagem MongoDB consolidada', () => {
   it('builds an insert-only synthetic catalogue with stable unique slugs', () => {
     const now = new Date();
     const operations = technologySeedOperations(now);
-    expect(operations).toHaveLength(14);
+    expect(operations).toHaveLength(TECNOLOGIAS_INICIAIS.length);
     expect(new Set(TECNOLOGIAS_INICIAIS.map((item) => item.slug)).size).toBe(operations.length);
     for (const { updateOne } of operations) {
       expect(updateOne.filter.slug).toBe(updateOne.update.$setOnInsert.slug);

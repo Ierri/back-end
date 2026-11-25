@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuthModule } from '../auth/auth.module.js';
 import { UsuariosModule } from '../usuarios/usuarios.module.js';
+import { Tecnologia, TecnologiaSchema } from '../usuarios/schemas/tecnologia.schema.js';
 import { Usuario, UsuarioSchema } from '../usuarios/schemas/usuario.schema.js';
 import {
   Seguidor,
@@ -48,6 +49,7 @@ import { NotificationProducerModule } from '../notificacoes/notification-produce
     NotificationProducerModule,
     MongooseModule.forFeature([
       { name: Publicacao.name, schema: PublicacaoSchema },
+      { name: Tecnologia.name, schema: TecnologiaSchema },
       { name: Usuario.name, schema: UsuarioSchema },
       { name: Seguidor.name, schema: SeguidorSchema },
       { name: UploadMedia.name, schema: UploadMediaSchema },

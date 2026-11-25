@@ -242,9 +242,21 @@ export class ComentariosService {
           .select('nome username avatar_url').exec()
       : [];
     const byId = new Map(authors.map((author) => [author._id.toString(), author]));
+    const parents = page.filter((item) => item.profundidade < 2).map((item) => item._id);
+    const withReplies = parents.length
+      ? await this.comentarios.aggregate<{ _id: Types.ObjectId }>([
+          { $match: { publicacao_id: filter.publicacao_id,
+            comentario_pai_id: { $in: parents }, criacao_estado: filter.criacao_estado } },
+          { $lookup: { from: 'usuarios', localField: 'autor_id', foreignField: '_id', as: 'autor',
+            pipeline: [{ $match: { status: 'ativo' } }, { $project: { _id: 1 } }] } },
+          { $match: { 'autor.0': { $exists: true } } },
+          { $group: { _id: '$comentario_pai_id' } },
+        ]).exec()
+      : [];
+    const parentIds = new Set(withReplies.map(({ _id }) => _id.toString()));
     const items = page.flatMap((item) => {
       const author = byId.get(item.autor_id.toString());
-      return author ? [this.toResponse(item, author)] : [];
+      return author ? [{ ...this.toResponse(item, author), temRespostas: parentIds.has(item._id.toString()) }] : [];
     });
     const last = page.at(-1);
     return {

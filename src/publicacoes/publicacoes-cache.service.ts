@@ -4,6 +4,8 @@ import { Types } from 'mongoose';
 import { z } from 'zod';
 import { PublicacoesCacheClient } from './publicacoes-cache.client.js';
 
+import { publicationStacksSchema } from './dto/publicacoes.dto.js';
+
 const objectId = z.string().regex(/^[a-f\d]{24}$/i);
 const cachedDate = z.iso.datetime().transform((value) => new Date(value));
 const mediaUrl = z.url().refine((value) => {
@@ -39,6 +41,7 @@ const post = z.strictObject({
     avatarUrl: z.string().nullable(),
   }),
   conteudo: z.string(),
+  stacks: publicationStacksSchema.optional(),
   midias: z.array(media).min(1).max(10),
   visibilidade: z.literal('publico'),
   status: z.literal('publicada'),
