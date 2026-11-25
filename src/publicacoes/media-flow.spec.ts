@@ -395,6 +395,27 @@ describe('MediaAccessService', () => {
     });
   });
 
+  it('revalidates public images without opening the storage stream', async () => {
+    const { service, storage } = setup('publico');
+    const etag = `"${'a'.repeat(64)}"`;
+    await expect(
+      service.open('valid-reference-123', undefined, undefined, `W/${etag}`),
+    ).resolves.toEqual({ notModified: true, etag });
+    expect(storage.get).not.toHaveBeenCalled();
+  });
+
+  it('checks access even when the browser already has the image', async () => {
+    const { service, storage } = setup('seguidores');
+    const etag = `"${'a'.repeat(64)}"`;
+    await expect(
+      service.open('valid-reference-123', undefined, undefined, etag),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(storage.get).not.toHaveBeenCalled();
+    await expect(
+      service.open('valid-reference-123', owner.toString(), undefined, etag),
+    ).resolves.toMatchObject({ notModified: false, etag: null });
+  });
+
   it('allows only the author to read restricted media', async () => {
     const { service, storage } = setup('seguidores');
     await expect(service.open('valid-reference-123')).rejects.toMatchObject({
@@ -490,6 +511,7 @@ describe('video byte ranges', () => {
       'bytes=-10',
     ]) {
       const result = await service.open(media.referencia, undefined, header);
+      if (result.notModified) throw new Error('Expected a video stream');
       expect(result.length).toBe(10);
       expect(result.range).toEqual(parseMediaRange(header, 100));
       expect(storage.get).toHaveBeenLastCalledWith(

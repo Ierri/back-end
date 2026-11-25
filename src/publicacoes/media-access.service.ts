@@ -43,7 +43,12 @@ export class MediaAccessService {
     @Inject(PublicacaoAccessService) private readonly access: PublicacaoAccessService,
   ) {}
 
-  async open(reference: string, viewerId?: string, rangeHeader?: string) {
+  async open(
+    reference: string,
+    viewerId?: string,
+    rangeHeader?: string,
+    ifNoneMatch?: string,
+  ) {
     const media = await this.uploads
       .findOne({
         referencia: reference,
@@ -61,6 +66,17 @@ export class MediaAccessService {
     if (!publication || !await this.access.canRead(publication, viewerId))
       throw new ApiException('MEDIA_NOT_FOUND');
     const isVideo = media.tipo === 'video';
+    const etag =
+      !isVideo && publication.visibilidade === 'publico'
+        ? `"${media.sha256}"`
+        : null;
+    if (
+      etag &&
+      ifNoneMatch?.split(',').some((tag) => tag.trim().replace(/^W\//, '') === etag)
+    ) {
+      return { notModified: true as const, etag };
+    }
+
     const range =
       isVideo && rangeHeader
         ? parseMediaRange(rangeHeader, media.tamanho_bytes)
@@ -84,6 +100,8 @@ export class MediaAccessService {
       throw new ApiException('MEDIA_STORAGE_UNAVAILABLE');
     }
     return {
+      notModified: false as const,
+      etag,
       body: object.Body,
       mimeType: media.mime_type,
       size: media.tamanho_bytes,
