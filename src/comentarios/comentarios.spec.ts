@@ -52,6 +52,7 @@ function setup() {
     findOne: vi.fn().mockReturnValue(q(null)),
     findById: vi.fn().mockReturnValue(q(comment())),
     find: vi.fn().mockReturnValue(q([])),
+    aggregate: vi.fn().mockReturnValue(q([])),
     findOneAndUpdate: vi.fn().mockReturnValue(q(comment())),
     updateOne: vi.fn().mockReturnValue(q({ modifiedCount: 1 })),
     deleteOne: vi.fn().mockReturnValue(q({ deletedCount: 1 })),
@@ -238,10 +239,12 @@ describe('comentários: validação, hierarquia e consistência', () => {
       comment({ status: 'excluido', conteudo: 'Segredo removido' }),
       comment({ _id: replyId, status: 'oculto', conteudo: 'Segredo oculto' }),
     ]));
+    comments.aggregate.mockReturnValue(q([{ _id: rootId }]));
     const page = await service.list(publicationId.toString(), { limite: 20 });
     expect(page.items.map((item) => item.conteudo)).toEqual(['Comentário removido', 'Comentário indisponível']);
     expect(JSON.stringify(page)).not.toContain('Segredo');
     expect(users.find).toHaveBeenCalledOnce();
+    expect(page.items.map((item) => item.temRespostas)).toEqual([true, false]);
     expect(page.hasMore).toBe(false);
   });
 

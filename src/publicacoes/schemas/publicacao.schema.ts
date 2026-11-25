@@ -156,6 +156,19 @@ export function validPublicationMedia(midias: PublicacaoMidia[]): boolean {
   timestamps: { createdAt: 'criada_em', updatedAt: 'atualizada_em' },
 })
 export class Publicacao {
+  @Prop({
+    type: [new MongooseSchema({
+      id: { type: String, required: true },
+      slug: { type: String, required: true },
+      nome: { type: String, required: true },
+      categoria: { type: String, default: null },
+      iconeUrl: { type: String, default: null },
+    }, { _id: false, id: false })],
+    default: [],
+  })
+  stacks: { id: string; slug: string; nome: string; categoria: string | null; iconeUrl: string | null }[];
+
+
   @Prop({ type: String, required: true, unique: true })
   slug: string;
 

@@ -21,9 +21,19 @@ export const listPublicacoesSchema = z.strictObject({
   message: 'autorId não pode ser combinado com escopo=seguindo.',
 });
 
+export const publicationStacksSchema = z.array(z.strictObject({
+  id: publicacaoIdSchema,
+  slug: z.string(),
+  nome: z.string(),
+  categoria: z.string().nullable(),
+  iconeUrl: z.string().nullable(),
+})).max(20);
+
 export const createPublicacaoSchema = z.strictObject({
   conteudo: z.string().trim().min(1),
   visibilidade: z.enum(['publico', 'seguidores']).default('publico'),
+  stackIds: z.array(publicacaoIdSchema.transform((id) => id.toLowerCase())).max(20)
+    .refine((ids) => new Set(ids).size === ids.length).optional(),
   midias: z
     .array(mediaReferenceSchema)
     .min(1)

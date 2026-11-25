@@ -4,6 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import type { Model } from 'mongoose';
 import { ApiException } from '../common/http/api.exception.js';
+import { Tecnologia } from '../usuarios/schemas/tecnologia.schema.js';
 import { Usuario } from '../usuarios/schemas/usuario.schema.js';
 import type { UsuarioDocument } from '../usuarios/schemas/usuario.schema.js';
 import { CreatorStatsService } from '../usuarios/creator-stats.service.js';
@@ -42,6 +43,7 @@ type AuthorSnapshot = {
 @Injectable()
 export class PublicacoesService {
   @Inject(CreatorStatsService) private creatorStats?: CreatorStatsService;
+  @InjectModel(Tecnologia.name) private tecnologias!: Model<Tecnologia>;
   constructor(
     @InjectModel(Publicacao.name)
     private readonly publicacoes: Model<Publicacao>,
@@ -214,6 +216,19 @@ export class PublicacoesService {
       .exec();
     if (!author) throw new ApiException('AUTH_REQUIRED');
 
+    const stackIds = body.stackIds ?? [];
+    const catalog = stackIds.length
+      ? await this.tecnologias.find({ _id: { $in: stackIds }, ativo: true })
+        .select('slug nome categoria icone_url').lean().exec()
+      : [];
+    if (catalog.length !== stackIds.length) throw new ApiException('TECNOLOGIAS_INVALIDAS');
+    const byId = new Map(catalog.map((item) => [item._id.toString(), item]));
+    const stacks = stackIds.map((id) => {
+      const item = byId.get(id)!;
+      return { id, slug: item.slug, nome: item.nome,
+        categoria: item.categoria ?? null, iconeUrl: item.icone_url ?? null };
+    });
+
     const publicationId = new Types.ObjectId();
     const verified = await this.mediaVerifier.resolveForPublication(
       authorId,
@@ -251,6 +266,7 @@ export class PublicacoesService {
         slug: `post-${randomBytes(12).toString('hex')}`,
         autor_id: new Types.ObjectId(authorId),
         conteudo: body.conteudo,
+        stacks,
         midias,
         visibilidade: body.visibilidade,
         status: 'processando',
@@ -534,6 +550,7 @@ export class PublicacoesService {
         avatarUrl: author.avatar_url ?? null,
       },
       conteudo: publication.conteudo,
+      stacks: (publication.stacks ?? []).map(({ id, slug, nome, categoria, iconeUrl }) => ({ id, slug, nome, categoria, iconeUrl })),
       midias: publication.midias.map((media) => ({
         id: media._id.toString(),
         tipo: media.tipo,
