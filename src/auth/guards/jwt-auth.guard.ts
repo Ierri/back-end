@@ -25,10 +25,19 @@ export class JwtAuthGuard implements CanActivate {
     return this.authenticate(request);
   }
 
-  async authenticate(request: AuthenticatedRequest) {
+  async authenticate(request: AuthenticatedRequest, allowInvalidCookie = false) {
     const token = this.readToken(request);
-    if (!token) throw new ApiException('TOKEN_REQUIRED');
-    const payload = await this.verifyToken(token, false);
+    if (!token) {
+      if (allowInvalidCookie) return true;
+      throw new ApiException('TOKEN_REQUIRED');
+    }
+    let payload;
+    try {
+      payload = await this.verifyToken(token, false);
+    } catch (error) {
+      if (allowInvalidCookie && error instanceof ApiException) return true;
+      throw error;
+    }
     await this.sessoes.assertActive(payload.sid, payload.sub);
     let active;
     try {

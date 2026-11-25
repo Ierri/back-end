@@ -108,6 +108,16 @@ describe.runIf(testConfig)('Auth HTTP with isolated MongoDB and Redis', () => {
     else delete process.env.REDIS_CHECK_EMAIL_RATE_PREFIX;
   });
 
+  it('allows anonymous public reads with a stale cookie only', async () => {
+    const cookie = 'ierri_session=invalid';
+    await request(app.getHttpServer()).get('/publicacoes')
+      .set('Cookie', cookie).expect(200);
+    await request(app.getHttpServer()).get('/publicacoes')
+      .set('Authorization', 'Bearer invalid').expect(401);
+    await request(app.getHttpServer()).get('/auth/me')
+      .set('Cookie', cookie).expect(401);
+  });
+
   it('persists users in MongoDB and expiring sessions in Redis', async () => {
     const agent = request.agent(app.getHttpServer());
     const registered = await agent
