@@ -31,6 +31,8 @@ export class PublicacoesCacheClient implements OnModuleInit, OnModuleDestroy {
   readonly feedTtl: number;
   readonly postTtl: number;
   readonly authorTtl: number;
+  readonly searchTtl: number;
+  readonly techTtl: number;
 
   constructor(@Inject(ConfigService) config: ConfigService) {
     this.prefix =
@@ -39,6 +41,8 @@ export class PublicacoesCacheClient implements OnModuleInit, OnModuleDestroy {
     this.feedTtl = ttl(config.get<string>('REDIS_CACHE_FEED_TTL'), 20);
     this.postTtl = ttl(config.get<string>('REDIS_CACHE_POST_TTL'), 45);
     this.authorTtl = ttl(config.get<string>('REDIS_CACHE_AUTHOR_TTL'), 30);
+    this.searchTtl = ttl(config.get<string>('REDIS_CACHE_SEARCH_TTL'), 15);
+    this.techTtl = ttl(config.get<string>('REDIS_CACHE_TECH_TTL'), 300);
     const enabled =
       config.get<string>('REDIS_CACHE_ENABLED')?.trim() === 'true';
     const url = config.get<string>('REDIS_CACHE_URL')?.trim();

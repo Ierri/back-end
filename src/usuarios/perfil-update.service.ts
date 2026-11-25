@@ -1,7 +1,8 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
 import { ApiException } from '../common/http/api.exception.js';
+import { PublicacoesCacheService } from '../publicacoes/publicacoes-cache.service.js';
 import type { UpdatePerfilDto } from './dto/perfil-update.dto.js';
 import { Usuario } from './schemas/usuario.schema.js';
 import type { UsuarioDocument } from './schemas/usuario.schema.js';
@@ -10,7 +11,12 @@ import { AvatarService } from './avatar.service.js';
 @Injectable()
 export class PerfilUpdateService {
   @Inject(AvatarService) private avatars?: AvatarService;
-  constructor(@InjectModel(Usuario.name) private readonly usuarios: Model<Usuario>) {}
+  @Optional()
+  @Inject(PublicacoesCacheService)
+  private cache?: PublicacoesCacheService;
+  constructor(
+    @InjectModel(Usuario.name) private readonly usuarios: Model<Usuario>,
+  ) {}
 
   async update(userId: string, dto: UpdatePerfilDto): Promise<UsuarioDocument> {
     const changes: Record<string, string | null> = {};
@@ -18,7 +24,8 @@ export class PerfilUpdateService {
     if (dto.username !== undefined) changes.username = dto.username;
     if (dto.biografia !== undefined) changes.biografia = dto.biografia;
     if (dto.avatarUrl !== undefined) changes.avatar_url = dto.avatarUrl;
-    if (dto.visibilidadePerfil !== undefined) changes.visibilidade_perfil = dto.visibilidadePerfil;
+    if (dto.visibilidadePerfil !== undefined)
+      changes.visibilidade_perfil = dto.visibilidadePerfil;
 
     try {
       if (dto.avatarUrl !== undefined && this.avatars)
@@ -31,6 +38,7 @@ export class PerfilUpdateService {
         )
         .exec();
       if (!updated) throw new ApiException('USER_NOT_FOUND');
+      await this.cache?.invalidateAuthor(userId).catch(() => undefined);
       return updated;
     } catch (error: unknown) {
       if (
@@ -40,7 +48,11 @@ export class PerfilUpdateService {
         error.code === 11000
       ) {
         const keys =
-          'keyPattern' in error ? error.keyPattern : 'keyValue' in error ? error.keyValue : null;
+          'keyPattern' in error
+            ? error.keyPattern
+            : 'keyValue' in error
+              ? error.keyValue
+              : null;
         if (typeof keys === 'object' && keys !== null && 'username' in keys) {
           throw new ApiException('USERNAME_ALREADY_EXISTS');
         }

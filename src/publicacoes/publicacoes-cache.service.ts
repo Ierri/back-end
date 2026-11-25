@@ -63,6 +63,7 @@ const page = z.strictObject({
   hasMore: z.boolean(),
 });
 
+export { post as cachedPublicacaoSchema };
 export type CachedPublicacao = z.infer<typeof post>;
 export type CachedPublicacoesPage = z.infer<typeof page>;
 
@@ -189,6 +190,16 @@ export class PublicacoesCacheService {
       `${this.client.prefix}generation:author:${this.hash(authorId.toLowerCase())}`,
     ];
     const success = await this.client.invalidate(keys);
+    if (success) this.counters.invalidation++;
+    else this.counters.error++;
+    return success;
+  }
+
+  async invalidateTechnologies() {
+    if (!this.client.enabled) return true;
+    const success = await this.client.invalidate([
+      `${this.client.prefix}generation:techs`,
+    ]);
     if (success) this.counters.invalidation++;
     else this.counters.error++;
     return success;
