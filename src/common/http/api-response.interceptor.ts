@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { SSE_METADATA } from '@nestjs/common/constants';
 import type {
   CallHandler,
   ExecutionContext,
@@ -21,19 +22,20 @@ export class ApiResponseInterceptor implements NestInterceptor<
     context: ExecutionContext,
     next: CallHandler,
   ): Observable<ApiSuccess<unknown>> {
+    if (this.reflector.get<boolean>(SSE_METADATA, context.getHandler())) {
+      return next.handle() as Observable<ApiSuccess<unknown>>;
+    }
     const message =
       this.reflector.getAllAndOverride(ResponseMessage, [
         context.getHandler(),
         context.getClass(),
       ]) ?? 'Operação realizada com sucesso.';
-    return next
-      .handle()
-      .pipe(
-        map((data: unknown) => ({
-          success: true as const,
-          message,
-          data: data ?? null,
-        })),
-      );
+    return next.handle().pipe(
+      map((data: unknown) => ({
+        success: true as const,
+        message,
+        data: data ?? null,
+      })),
+    );
   }
 }
