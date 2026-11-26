@@ -22,6 +22,7 @@ export interface MediaVerifier {
     authorId: string,
     references: readonly string[],
     publicationId: string,
+    editing?: boolean,
   ): Promise<VerifiedMedia[]>;
   confirmForPublication(
     publicationId: string,
@@ -34,6 +35,7 @@ export interface MediaVerifier {
   releaseForPublication(
     publicationId: string,
     references: readonly string[],
+    editing?: boolean,
   ): Promise<void>;
 }
 

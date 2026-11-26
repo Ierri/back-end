@@ -70,7 +70,7 @@ describe.runIf(mongoUri)('modelagem com MongoDB local isolado', () => {
     const firstUser = await usuarios.findOne({ email: env.IERRI_SEED_EMAIL }).select('+senha_hash').lean().exec();
     expect(firstUser).toMatchObject({ nome: env.IERRI_SEED_NAME, username: env.IERRI_SEED_USERNAME });
     expect(firstUser?.senha_hash).toMatch(/^\$2[aby]\$12\$/);
-    expect(await tecnologias.countDocuments({ slug: { $in: TECNOLOGIAS_INICIAIS.map((item) => item.slug) } })).toBe(14);
+    expect(await tecnologias.countDocuments({ slug: { $in: TECNOLOGIAS_INICIAIS.map((item) => item.slug) } })).toBe(TECNOLOGIAS_INICIAIS.length);
 
     await usuarios.updateOne({ email: env.IERRI_SEED_EMAIL }, { $set: { nome: 'Nome preservado' } });
     await tecnologias.updateOne({ slug: 'html' }, { $set: { nome: 'HTML personalizado', ativo: false } });
@@ -82,7 +82,7 @@ describe.runIf(mongoUri)('modelagem com MongoDB local isolado', () => {
     expect(await usuarios.findOne({ email: env.IERRI_SEED_EMAIL }).select('+senha_hash').lean().exec()).toEqual(beforeUser);
     expect(await tecnologias.findOne({ slug: 'html' }).lean().exec()).toEqual(beforeTechnology);
     expect(await tecnologias.findById(existing._id).lean().exec()).toMatchObject({ nome: 'Tecnologia local', ativo: false });
-    expect(await tecnologias.countDocuments({ slug: { $in: TECNOLOGIAS_INICIAIS.map((item) => item.slug) } })).toBe(14);
+    expect(await tecnologias.countDocuments({ slug: { $in: TECNOLOGIAS_INICIAIS.map((item) => item.slug) } })).toBe(TECNOLOGIAS_INICIAIS.length);
   });
 
   it('keeps the catalogue idempotent and preserves edited or inactive entries', async () => {
@@ -93,7 +93,7 @@ describe.runIf(mongoUri)('modelagem com MongoDB local isolado', () => {
     await tecnologias.bulkWrite(technologySeedOperations(new Date()));
     const after = await tecnologias.findOne({ slug: 'html' }).lean().exec();
     expect(after).toEqual(before);
-    expect(await tecnologias.countDocuments({ slug: { $in: TECNOLOGIAS_INICIAIS.map((entry) => entry.slug) } })).toBe(14);
+    expect(await tecnologias.countDocuments({ slug: { $in: TECNOLOGIAS_INICIAIS.map((entry) => entry.slug) } })).toBe(TECNOLOGIAS_INICIAIS.length);
   });
 
   it('enforces unique follower, vote and saved-publication pairs', async () => {

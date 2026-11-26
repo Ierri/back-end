@@ -15,6 +15,9 @@ export class OptionalAuthGuard implements CanActivate {
       .some((part) => part.trim().startsWith(`${SESSION_COOKIE}=`));
     if (request.headers.authorization === undefined && !hasSessionCookie)
       return true;
-    return this.auth.authenticate(request);
+    const allowInvalidCookie =
+      request.headers.authorization === undefined &&
+      ['GET', 'HEAD'].includes(request.method);
+    return this.auth.authenticate(request, allowInvalidCookie);
   }
 }

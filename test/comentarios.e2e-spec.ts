@@ -334,8 +334,7 @@ describe.runIf(config)('comentários com MongoDB, Redis e MinIO locais', () => {
     await request(app.getHttpServer()).delete('/comentarios/' + rootId)
       .set('Authorization', 'Bearer ' + tokenB).expect(404);
     const roots = await request(app.getHttpServer()).get('/publicacoes/' + postId + '/comentarios').expect(200);
-    expect(roots.body.data.items[0].conteudo).toBe('Comentário removido');
-    expect(roots.body.data.items[0].status).toBe('excluido');
+    expect(roots.body.data.items).not.toContainEqual(expect.objectContaining({ id: rootId }));
     const replies = await request(app.getHttpServer()).get('/comentarios/' + rootId + '/respostas').expect(200);
     expect(replies.body.data.items[0].id).toBe(replyId);
     await createComment(tokenA, { conteudo: 'Não permitido', comentarioPaiId: rootId }).expect(404);

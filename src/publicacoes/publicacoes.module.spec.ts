@@ -113,6 +113,19 @@ describe('PublicacoesModule wiring', () => {
     expect(response.body).toEqual(Buffer.from('image-bytes'));
   });
 
+  it('returns a bodyless 304 for a revalidated public image', async () => {
+    const etag = `"${'a'.repeat(64)}"`;
+    const access = vi.mocked(app.get(MediaAccessService));
+    access.open.mockResolvedValueOnce({ notModified: true, etag });
+    const response = await request(app.getHttpServer())
+      .get('/publicacoes/midias/valid-reference-123')
+      .set('If-None-Match', etag)
+      .expect(304)
+      .expect('ETag', etag)
+      .expect('Cache-Control', 'private, no-cache');
+    expect(response.text).toBe('');
+  });
+
   it('rejects invalid media credentials before serving bytes', async () => {
     await request(app.getHttpServer())
       .get('/publicacoes/midias/valid-reference-123')

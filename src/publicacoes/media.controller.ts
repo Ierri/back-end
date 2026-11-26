@@ -62,6 +62,7 @@ export class MediaController {
         reference,
         request.authUserId,
         request.headers.range,
+        request.headers['if-none-match'],
       );
     } catch (error) {
       if (error instanceof UnsatisfiableMediaRange) {
@@ -72,6 +73,16 @@ export class MediaController {
       }
       throw error;
     }
+    response.setHeader(
+      'Cache-Control',
+      media.etag ? 'private, no-cache' : 'private, no-store',
+    );
+    if (media.etag) response.setHeader('ETag', media.etag);
+    if (media.notModified) {
+      response.status(304).end();
+      return;
+    }
+
     response.setHeader('Content-Type', media.mimeType);
     response.setHeader('Content-Length', media.length);
     if (media.isVideo) response.setHeader('Accept-Ranges', 'bytes');
@@ -83,7 +94,6 @@ export class MediaController {
       );
     }
     response.setHeader('Content-Disposition', 'inline');
-    response.setHeader('Cache-Control', 'private, no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     try {
       await pipeline(media.body, response);

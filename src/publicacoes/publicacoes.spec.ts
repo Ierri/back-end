@@ -544,6 +544,61 @@ describe('PublicacoesService', () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 
+  it('keeps existing media and inserts verified uploads in the chosen cover order', async () => {
+    const reference = 'referencia-verificada';
+    const verify = vi.fn().mockResolvedValue([{
+      referencia: reference,
+      tipo: 'imagem',
+      url: 'https://media.example.test/new',
+      chave_storage: 'uploads/new-image',
+      mime_type: 'image/png',
+      tamanho_bytes: 100,
+      largura: 10,
+      altura: 10,
+      duracao_segundos: null,
+    }]);
+    const confirm = vi.fn().mockResolvedValue(undefined);
+    const finalize = vi.fn().mockResolvedValue(undefined);
+    const release = vi.fn().mockResolvedValue(undefined);
+    const { service, publications, saved } = setup({
+      resolveForPublication: verify,
+      confirmForPublication: confirm,
+      finalizeForPublication: finalize,
+      releaseForPublication: release,
+    });
+    const existing = saved.midias[0];
+    const result = await service.update(postId.toString(), authorId.toString(), {
+      stackIds: [],
+      midias: [{ referencia: reference }, { id: existing._id.toString() }],
+    });
+    expect(verify).toHaveBeenCalledWith(authorId.toString(), [reference], postId.toString(), true);
+    expect(confirm).toHaveBeenCalledBefore(publications.findOneAndUpdate);
+    expect(publications.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ $expr: { $eq: ['$midias._id', [existing._id]] } }),
+      { $set: expect.objectContaining({ stacks: [], midias: [
+        expect.objectContaining({ chave_storage: 'uploads/new-image', ordem: 0 }),
+        expect.objectContaining({ _id: existing._id, ordem: 1 }),
+      ] }) },
+      expect.anything(),
+    );
+    expect(finalize).toHaveBeenCalledWith(postId.toString(), [reference]);
+    expect(result.id).toBe(saved._id.toString());
+
+    publications.findOneAndUpdate.mockReturnValueOnce(query(null));
+    await expect(service.update(postId.toString(), authorId.toString(), {
+      midias: [{ referencia: reference }],
+    })).rejects.toMatchObject({ response: { code: 'MEDIA_INVALID' } });
+    expect(release).toHaveBeenCalledWith(postId.toString(), [reference], true);
+  });
+
+  it('rejects media ids from outside the publication before updating it', async () => {
+    const { service, publications } = setup();
+    await expect(service.update(postId.toString(), authorId.toString(), {
+      midias: [{ id: new Types.ObjectId().toString() }],
+    })).rejects.toMatchObject({ response: { code: 'MEDIA_INVALID' } });
+    expect(publications.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
   it("atomically soft-deletes only the author's published post", async () => {
     const { service, publications } = setup();
     await expect(

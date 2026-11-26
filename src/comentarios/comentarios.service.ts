@@ -226,6 +226,7 @@ export class ComentariosService {
     const filter = {
       publicacao_id: new Types.ObjectId(publicationId),
       comentario_pai_id: parentId ? new Types.ObjectId(parentId) : null,
+      status: { $ne: 'excluido' as const },
       criacao_estado: { $nin: ['pendente', 'falhou'] as const },
       ...(position ? { $or: [
         { criado_em: { $gt: position.createdAt } },
@@ -242,9 +243,21 @@ export class ComentariosService {
           .select('nome username avatar_url').exec()
       : [];
     const byId = new Map(authors.map((author) => [author._id.toString(), author]));
+    const parents = page.filter((item) => item.profundidade < 2).map((item) => item._id);
+    const withReplies = parents.length
+      ? await this.comentarios.aggregate<{ _id: Types.ObjectId }>([
+          { $match: { publicacao_id: filter.publicacao_id,
+            comentario_pai_id: { $in: parents }, status: filter.status, criacao_estado: filter.criacao_estado } },
+          { $lookup: { from: 'usuarios', localField: 'autor_id', foreignField: '_id', as: 'autor',
+            pipeline: [{ $match: { status: 'ativo' } }, { $project: { _id: 1 } }] } },
+          { $match: { 'autor.0': { $exists: true } } },
+          { $group: { _id: '$comentario_pai_id' } },
+        ]).exec()
+      : [];
+    const parentIds = new Set(withReplies.map(({ _id }) => _id.toString()));
     const items = page.flatMap((item) => {
       const author = byId.get(item.autor_id.toString());
-      return author ? [this.toResponse(item, author)] : [];
+      return author ? [{ ...this.toResponse(item, author), temRespostas: parentIds.has(item._id.toString()) }] : [];
     });
     const last = page.at(-1);
     return {
@@ -367,7 +380,7 @@ export class ComentariosService {
       },
       conteudo: comment.status === 'publicado'
         ? comment.conteudo
-        : comment.status === 'excluido' ? 'Comentário removido' : 'Comentário indisponível',
+        : 'Comentário indisponível',
       profundidade: comment.profundidade,
       comentarioPaiId: comment.comentario_pai_id?.toString() ?? null,
       comentarioRaizId: comment.comentario_raiz_id?.toString() ?? null,

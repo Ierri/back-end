@@ -4,6 +4,8 @@ import { Types } from 'mongoose';
 import { z } from 'zod';
 import { PublicacoesCacheClient } from './publicacoes-cache.client.js';
 
+import { publicationStacksSchema } from './dto/publicacoes.dto.js';
+
 const objectId = z.string().regex(/^[a-f\d]{24}$/i);
 const cachedDate = z.iso.datetime().transform((value) => new Date(value));
 const mediaUrl = z.url().refine((value) => {
@@ -39,6 +41,7 @@ const post = z.strictObject({
     avatarUrl: z.string().nullable(),
   }),
   conteudo: z.string(),
+  stacks: publicationStacksSchema.optional(),
   midias: z.array(media).min(1).max(10),
   visibilidade: z.literal('publico'),
   status: z.literal('publicada'),
@@ -63,6 +66,7 @@ const page = z.strictObject({
   hasMore: z.boolean(),
 });
 
+export { post as cachedPublicacaoSchema };
 export type CachedPublicacao = z.infer<typeof post>;
 export type CachedPublicacoesPage = z.infer<typeof page>;
 
@@ -189,6 +193,16 @@ export class PublicacoesCacheService {
       `${this.client.prefix}generation:author:${this.hash(authorId.toLowerCase())}`,
     ];
     const success = await this.client.invalidate(keys);
+    if (success) this.counters.invalidation++;
+    else this.counters.error++;
+    return success;
+  }
+
+  async invalidateTechnologies() {
+    if (!this.client.enabled) return true;
+    const success = await this.client.invalidate([
+      `${this.client.prefix}generation:techs`,
+    ]);
     if (success) this.counters.invalidation++;
     else this.counters.error++;
     return success;

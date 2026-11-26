@@ -11,6 +11,7 @@ import { ComentariosModule } from './comentarios/comentarios.module.js';
 import { PerfisModule } from './perfis/perfis.module.js';
 import { NotificacoesModule } from './notificacoes/notificacoes.module.js';
 import { ModeracaoModule } from './moderacao/moderacao.module.js';
+import { BuscaModule } from './busca/busca.module.js';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { ModeracaoModule } from './moderacao/moderacao.module.js';
     PerfisModule,
     NotificacoesModule,
     ModeracaoModule,
+    BuscaModule,
   ],
   controllers: [AppController],
   providers: [AppService],

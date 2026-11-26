@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { OptionalAuthGuard } from '../publicacoes/optional-auth.guard.js';
+import { PublicacoesModule } from '../publicacoes/publicacoes.module.js';
 import { RequiredAuthGuard } from '../publicacoes/required-auth.guard.js';
 import { TecnologiasController } from '../tecnologias/tecnologias.controller.js';
 import { AdminTecnologiasController } from '../tecnologias/admin-tecnologias.controller.js';
@@ -18,8 +19,19 @@ import { NotificationProducerModule } from '../notificacoes/notification-produce
 import { AvatarModule } from '../usuarios/avatar.module.js';
 
 @Module({
-  imports: [AuthModule, UsuariosModule, NotificationProducerModule, AvatarModule],
-  controllers: [UsuariosController, TecnologiasController, AdminTecnologiasController, SeguidoresController],
+  imports: [
+    AuthModule,
+    PublicacoesModule,
+    UsuariosModule,
+    NotificationProducerModule,
+    AvatarModule,
+  ],
+  controllers: [
+    UsuariosController,
+    TecnologiasController,
+    AdminTecnologiasController,
+    SeguidoresController,
+  ],
   providers: [
     OptionalAuthGuard,
     RequiredAuthGuard,

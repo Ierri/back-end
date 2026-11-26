@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import type { Model } from 'mongoose';
 import { ApiException } from '../common/http/api.exception.js';
+import { PublicacoesCacheService } from '../publicacoes/publicacoes-cache.service.js';
 import { Tecnologia } from './schemas/tecnologia.schema.js';
 import { Usuario } from './schemas/usuario.schema.js';
 
@@ -10,7 +11,11 @@ import { Usuario } from './schemas/usuario.schema.js';
 export class UsuariosStacksService {
   constructor(
     @InjectModel(Usuario.name) private readonly usuarios: Model<Usuario>,
-    @InjectModel(Tecnologia.name) private readonly tecnologias: Model<Tecnologia>,
+    @InjectModel(Tecnologia.name)
+    private readonly tecnologias: Model<Tecnologia>,
+    @Optional()
+    @Inject(PublicacoesCacheService)
+    private readonly cache?: PublicacoesCacheService,
   ) {}
 
   async replace(userId: string, stackIds: string[]): Promise<string[]> {
@@ -24,10 +29,15 @@ export class UsuariosStacksService {
     }
 
     const ids = normalized.map((id) => new Types.ObjectId(id));
-    const current = await this.usuarios.findOne({ _id: new Types.ObjectId(userId), status: 'ativo' })
-      .select('stack_ids').lean().exec();
+    const current = await this.usuarios
+      .findOne({ _id: new Types.ObjectId(userId), status: 'ativo' })
+      .select('stack_ids')
+      .lean()
+      .exec();
     if (!current) throw new ApiException('AUTH_REQUIRED');
-    const previous = new Set((current.stack_ids ?? []).map((id) => id.toString()));
+    const previous = new Set(
+      (current.stack_ids ?? []).map((id) => id.toString()),
+    );
     const added = ids.filter((id) => !previous.has(id.toString()));
     if (added.length) {
       const found = await this.tecnologias
@@ -36,7 +46,8 @@ export class UsuariosStacksService {
         .limit(added.length)
         .lean()
         .exec();
-      if (found.length !== added.length) throw new ApiException('TECNOLOGIAS_INVALIDAS');
+      if (found.length !== added.length)
+        throw new ApiException('TECNOLOGIAS_INVALIDAS');
     }
 
     const updated = await this.usuarios
@@ -48,6 +59,7 @@ export class UsuariosStacksService {
       .select('stack_ids')
       .exec();
     if (!updated) throw new ApiException('AUTH_REQUIRED');
+    await this.cache?.invalidateAuthor(userId).catch(() => undefined);
     return updated.stack_ids.map((id) => id.toString());
   }
 }
