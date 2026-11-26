@@ -2,7 +2,10 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuthModule } from '../auth/auth.module.js';
 import { UsuariosModule } from '../usuarios/usuarios.module.js';
-import { Tecnologia, TecnologiaSchema } from '../usuarios/schemas/tecnologia.schema.js';
+import {
+  Tecnologia,
+  TecnologiaSchema,
+} from '../usuarios/schemas/tecnologia.schema.js';
 import { Usuario, UsuarioSchema } from '../usuarios/schemas/usuario.schema.js';
 import {
   Seguidor,
@@ -32,6 +35,7 @@ import {
 import { VideoProbeService } from './video-probe.service.js';
 import { Voto, VotoSchema } from './schemas/voto.schema.js';
 import { VotosController } from './votos.controller.js';
+import { VotosStreamService } from './votos-stream.service.js';
 import { VotosService } from './votos.service.js';
 import {
   PublicacaoSalva,
@@ -71,6 +75,7 @@ import { NotificationProducerModule } from '../notificacoes/notification-produce
     PublicacoesCursor,
     OptionalAuthGuard,
     RequiredAuthGuard,
+    VotosStreamService,
     VotosService,
     SalvosService,
     SalvosCursor,

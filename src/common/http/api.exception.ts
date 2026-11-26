@@ -20,7 +20,8 @@ export const API_ERRORS = {
   },
   SEGUIDOR_WRITE_UNAVAILABLE: {
     status: HttpStatus.SERVICE_UNAVAILABLE,
-    message: 'Não foi possível atualizar a relação agora. Tente novamente mais tarde.',
+    message:
+      'Não foi possível atualizar a relação agora. Tente novamente mais tarde.',
   },
   CHECK_EMAIL_RATE_LIMITED: {
     status: HttpStatus.TOO_MANY_REQUESTS,
@@ -70,7 +71,8 @@ export const API_ERRORS = {
   },
   AUTH_STATUS_UNAVAILABLE: {
     status: HttpStatus.SERVICE_UNAVAILABLE,
-    message: 'Não foi possível validar a conta agora. Tente novamente mais tarde.',
+    message:
+      'Não foi possível validar a conta agora. Tente novamente mais tarde.',
   },
   ROLE_FORBIDDEN: {
     status: HttpStatus.FORBIDDEN,
@@ -98,19 +100,28 @@ export const API_ERRORS = {
   },
   VOTO_OPERATION_PENDING: {
     status: HttpStatus.SERVICE_UNAVAILABLE,
-    message: 'A operação do voto ainda não foi concluída. Tente novamente mais tarde.',
+    message:
+      'A operação do voto ainda não foi concluída. Tente novamente mais tarde.',
   },
   VOTO_WRITE_UNAVAILABLE: {
     status: HttpStatus.SERVICE_UNAVAILABLE,
-    message: 'Não foi possível salvar o voto agora. Tente novamente mais tarde.',
+    message:
+      'Não foi possível salvar o voto agora. Tente novamente mais tarde.',
+  },
+  VOTO_STREAM_LIMIT_EXCEEDED: {
+    status: HttpStatus.TOO_MANY_REQUESTS,
+    message:
+      'Muitas conexões simultâneas de atualização em tempo real. Tente novamente em instantes.',
   },
   SALVO_OPERATION_PENDING: {
     status: HttpStatus.SERVICE_UNAVAILABLE,
-    message: 'A operação de salvamento ainda não foi concluída. Tente novamente mais tarde.',
+    message:
+      'A operação de salvamento ainda não foi concluída. Tente novamente mais tarde.',
   },
   SALVO_WRITE_UNAVAILABLE: {
     status: HttpStatus.SERVICE_UNAVAILABLE,
-    message: 'Não foi possível atualizar os salvos agora. Tente novamente mais tarde.',
+    message:
+      'Não foi possível atualizar os salvos agora. Tente novamente mais tarde.',
   },
   COMENTARIO_NOT_FOUND: {
     status: HttpStatus.NOT_FOUND,
@@ -122,11 +133,13 @@ export const API_ERRORS = {
   },
   COMENTARIO_WRITE_UNAVAILABLE: {
     status: HttpStatus.SERVICE_UNAVAILABLE,
-    message: 'Não foi possível salvar o comentário agora. Tente novamente mais tarde.',
+    message:
+      'Não foi possível salvar o comentário agora. Tente novamente mais tarde.',
   },
   COMENTARIO_OPERATION_PENDING: {
     status: HttpStatus.SERVICE_UNAVAILABLE,
-    message: 'A operação do comentário ainda não foi concluída. Tente novamente mais tarde.',
+    message:
+      'A operação do comentário ainda não foi concluída. Tente novamente mais tarde.',
   },
   COMENTARIO_IDEMPOTENCY_CONFLICT: {
     status: HttpStatus.CONFLICT,

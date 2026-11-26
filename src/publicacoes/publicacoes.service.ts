@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import type { Model } from 'mongoose';
@@ -30,6 +30,7 @@ import type {
   PublicacaoDocument,
   PublicacaoMidia,
 } from './schemas/publicacao.schema.js';
+import { VotosStreamService } from './votos-stream.service.js';
 
 type AuthorSnapshot = {
   _id: Types.ObjectId;
@@ -44,6 +45,9 @@ type AuthorSnapshot = {
 export class PublicacoesService {
   @Inject(CreatorStatsService) private creatorStats?: CreatorStatsService;
   @InjectModel(Tecnologia.name) private tecnologias!: Model<Tecnologia>;
+  @Optional()
+  @Inject(VotosStreamService)
+  private votosStream?: VotosStreamService;
   constructor(
     @InjectModel(Publicacao.name)
     private readonly publicacoes: Model<Publicacao>,
@@ -59,25 +63,37 @@ export class PublicacoesService {
   async list(query: ListPublicacoesDto, viewerId?: string) {
     const authorId = query.autorId?.toLowerCase() ?? null;
     if (query.escopo === 'seguindo' && authorId)
-      throw new ApiException('VALIDATION_ERROR', [{ field: 'autorId', message: 'autorId não pode ser combinado com escopo=seguindo.' }]);
+      throw new ApiException('VALIDATION_ERROR', [
+        {
+          field: 'autorId',
+          message: 'autorId não pode ser combinado com escopo=seguindo.',
+        },
+      ]);
     if (query.escopo === 'seguindo' && !viewerId)
       throw new ApiException('AUTH_REQUIRED');
     const scope = {
       authorId,
       owner: authorId !== null && authorId === viewerId?.toLowerCase(),
       viewerId: viewerId?.toLowerCase() ?? null,
-      feed: query.escopo === 'seguindo' ? 'seguindo' as const : 'geral' as const,
-      order: query.ordem === 'score' ? 'score' as const : 'cronologica' as const,
+      feed:
+        query.escopo === 'seguindo'
+          ? ('seguindo' as const)
+          : ('geral' as const),
+      order:
+        query.ordem === 'score' ? ('score' as const) : ('cronologica' as const),
     };
     const position = query.cursor
       ? this.cursor.decode(query.cursor, scope)
       : null;
-    const address = viewerId || query.ordem === 'score' ? null : await this.cache.pageAddress(
-      query.limite,
-      authorId,
-      position,
-      scope.owner,
-    );
+    const address =
+      viewerId || query.ordem === 'score'
+        ? null
+        : await this.cache.pageAddress(
+            query.limite,
+            authorId,
+            position,
+            scope.owner,
+          );
     if (address) {
       const cached = await this.cache.readPage(address);
       const currentAuthors = cached
@@ -107,8 +123,9 @@ export class PublicacoesService {
       };
       return viewerId ? load() : this.cache.coalesce(address.key, load);
     }
-    return (await this.loadList(query, authorId, scope.owner, position, viewerId))
-      .viewer;
+    return (
+      await this.loadList(query, authorId, scope.owner, position, viewerId)
+    ).viewer;
   }
 
   private async loadList(
@@ -118,44 +135,70 @@ export class PublicacoesService {
     position: { publishedAt: Date; id: Types.ObjectId; score?: number } | null,
     viewerId?: string,
   ) {
-    const visibility = query.escopo === 'seguindo'
-      ? await this.access.followingVisibility(viewerId!)
-      : await this.access.listVisibility(viewerId, authorId);
+    const visibility =
+      query.escopo === 'seguindo'
+        ? await this.access.followingVisibility(viewerId!)
+        : await this.access.listVisibility(viewerId, authorId);
     const positionFilter = position
       ? query.ordem === 'score'
-        ? { $or: [
-            { 'contadores.score': { $lt: position.score! } },
-            { 'contadores.score': position.score, publicada_em: { $lt: position.publishedAt } },
-            { 'contadores.score': position.score, publicada_em: position.publishedAt, _id: { $lt: position.id } },
-          ] }
-        : { $or: [
-            { publicada_em: { $lt: position.publishedAt } },
-            { publicada_em: position.publishedAt, _id: { $lt: position.id } },
-          ] }
+        ? {
+            $or: [
+              { 'contadores.score': { $lt: position.score! } },
+              {
+                'contadores.score': position.score,
+                publicada_em: { $lt: position.publishedAt },
+              },
+              {
+                'contadores.score': position.score,
+                publicada_em: position.publishedAt,
+                _id: { $lt: position.id },
+              },
+            ],
+          }
+        : {
+            $or: [
+              { publicada_em: { $lt: position.publishedAt } },
+              { publicada_em: position.publishedAt, _id: { $lt: position.id } },
+            ],
+          }
       : null;
     const filter = {
       status: 'publicada' as const,
       ...(authorId ? { autor_id: new Types.ObjectId(authorId) } : {}),
       ...(positionFilter ? { $and: [visibility, positionFilter] } : visibility),
     };
-    const found = query.ordem === 'score'
-      ? (await this.publicacoes.aggregate<Publicacao>([
-          { $match: filter },
-          { $sort: { 'contadores.score': -1, publicada_em: -1, _id: -1 } },
-          { $lookup: {
-            from: 'usuarios', localField: 'autor_id', foreignField: '_id',
-            pipeline: [{ $match: { status: 'ativo' } }, { $project: { _id: 1 } }],
-            as: 'activeAuthor',
-          } },
-          { $match: { 'activeAuthor.0': { $exists: true } } },
-          { $limit: query.limite + 1 },
-          { $unset: 'activeAuthor' },
-        ]).exec()).map((post) => this.publicacoes.hydrate(post))
-      : await this.publicacoes
-          .find(filter)
-          .sort({ publicada_em: -1, _id: -1 })
-          .limit(query.limite + 1)
-          .exec();
+    const found =
+      query.ordem === 'score'
+        ? (
+            await this.publicacoes
+              .aggregate<Publicacao>([
+                { $match: filter },
+                {
+                  $sort: { 'contadores.score': -1, publicada_em: -1, _id: -1 },
+                },
+                {
+                  $lookup: {
+                    from: 'usuarios',
+                    localField: 'autor_id',
+                    foreignField: '_id',
+                    pipeline: [
+                      { $match: { status: 'ativo' } },
+                      { $project: { _id: 1 } },
+                    ],
+                    as: 'activeAuthor',
+                  },
+                },
+                { $match: { 'activeAuthor.0': { $exists: true } } },
+                { $limit: query.limite + 1 },
+                { $unset: 'activeAuthor' },
+              ])
+              .exec()
+          ).map((post) => this.publicacoes.hydrate(post))
+        : await this.publicacoes
+            .find(filter)
+            .sort({ publicada_em: -1, _id: -1 })
+            .limit(query.limite + 1)
+            .exec();
     const hasMore = found.length > query.limite;
     const page = found.slice(0, query.limite);
     const authorIds = [
@@ -186,11 +229,20 @@ export class PublicacoesService {
       nextCursor:
         hasMore && last
           ? this.cursor.encode(
-              { publishedAt: last.publicada_em!, id: last._id,
-                ...(query.ordem === 'score' ? { score: last.contadores.score } : {}) },
-              { authorId, owner, viewerId: viewerId?.toLowerCase() ?? null,
+              {
+                publishedAt: last.publicada_em!,
+                id: last._id,
+                ...(query.ordem === 'score'
+                  ? { score: last.contadores.score }
+                  : {}),
+              },
+              {
+                authorId,
+                owner,
+                viewerId: viewerId?.toLowerCase() ?? null,
                 feed: query.escopo === 'seguindo' ? 'seguindo' : 'geral',
-                order: query.ordem === 'score' ? 'score' : 'cronologica' },
+                order: query.ordem === 'score' ? 'score' : 'cronologica',
+              },
             )
           : null,
       hasMore,
@@ -198,28 +250,40 @@ export class PublicacoesService {
     return {
       shared,
       viewer: viewerId ? { ...shared, items: viewerItems } : shared,
-      cacheable: !viewerId && query.ordem !== 'score' && page.every(
-        (post) =>
-          post.visibilidade === 'publico' &&
-          !post.votos_projecao_pendente &&
-          !post.votos_operacoes_pendentes?.length &&
-          !post.salvamentos_projecao_pendente &&
-          !post.salvamentos_operacoes_pendentes?.length,
-      ),
+      cacheable:
+        !viewerId &&
+        query.ordem !== 'score' &&
+        page.every(
+          (post) =>
+            post.visibilidade === 'publico' &&
+            !post.votos_projecao_pendente &&
+            !post.votos_operacoes_pendentes?.length &&
+            !post.salvamentos_projecao_pendente &&
+            !post.salvamentos_operacoes_pendentes?.length,
+        ),
     };
   }
 
   private async resolveStacks(stackIds: string[]) {
     const catalog = stackIds.length
-      ? await this.tecnologias.find({ _id: { $in: stackIds }, ativo: true })
-        .select('slug nome categoria icone_url').lean().exec()
+      ? await this.tecnologias
+          .find({ _id: { $in: stackIds }, ativo: true })
+          .select('slug nome categoria icone_url')
+          .lean()
+          .exec()
       : [];
-    if (catalog.length !== stackIds.length) throw new ApiException('TECNOLOGIAS_INVALIDAS');
+    if (catalog.length !== stackIds.length)
+      throw new ApiException('TECNOLOGIAS_INVALIDAS');
     const byId = new Map(catalog.map((item) => [item._id.toString(), item]));
     return stackIds.map((id) => {
       const item = byId.get(id)!;
-      return { id, slug: item.slug, nome: item.nome,
-        categoria: item.categoria ?? null, iconeUrl: item.icone_url ?? null };
+      return {
+        id,
+        slug: item.slug,
+        nome: item.nome,
+        categoria: item.categoria ?? null,
+        iconeUrl: item.icone_url ?? null,
+      };
     });
   }
 
@@ -247,7 +311,9 @@ export class PublicacoesService {
       ) {
         throw new ApiException('MEDIA_INVALID');
       }
-      const midias = verified.map((media, ordem) => this.toPublicationMedia(media, ordem));
+      const midias = verified.map((media, ordem) =>
+        this.toPublicationMedia(media, ordem),
+      );
       if (!validPublicationMedia(midias))
         throw new ApiException('MEDIA_INVALID');
 
@@ -308,11 +374,7 @@ export class PublicacoesService {
         cached && cached.id.toLowerCase() === id.toLowerCase()
           ? await this.cachedPostsCurrent([cached], null)
           : null;
-      if (
-        cached &&
-        currentAuthors &&
-        (await this.cache.isCurrent(address))
-      ) {
+      if (cached && currentAuthors && (await this.cache.isCurrent(address))) {
         this.cache.countHit();
         return this.forViewer(cached, viewerId, currentAuthors);
       }
@@ -333,13 +395,17 @@ export class PublicacoesService {
     const publication = await this.publicacoes
       .findOne({ _id: id, status: 'publicada' })
       .exec();
-    if (!publication || !await this.access.canRead(publication, viewerId))
+    if (!publication || !(await this.access.canRead(publication, viewerId)))
       throw new ApiException('PUBLICACAO_NOT_FOUND');
     const author = await this.usuarios
       .findById(publication.autor_id)
       .select('nome username biografia avatar_url visibilidade_perfil')
       .exec();
-    if (!author || author.status === 'bloqueado' || author.status === 'excluido')
+    if (
+      !author ||
+      author.status === 'bloqueado' ||
+      author.status === 'excluido'
+    )
       throw new ApiException('PUBLICACAO_NOT_FOUND');
     return {
       shared: this.toResponse(publication, author),
@@ -370,8 +436,7 @@ export class PublicacoesService {
     for (let index = 0; index < cached.items.length; index++) {
       const item = cached.items[index];
       if (authorId && item.autor.id.toLowerCase() !== authorId) return null;
-      if (index > 0 && compare(cached.items[index - 1], item) <= 0)
-        return null;
+      if (index > 0 && compare(cached.items[index - 1], item) <= 0) return null;
       if (
         position &&
         (item.publicadaEm.getTime() > position.publishedAt.getTime() ||
@@ -407,7 +472,9 @@ export class PublicacoesService {
     const ids = cached.map((item) => new Types.ObjectId(item.id));
     const stored = await this.publicacoes
       .find({ _id: { $in: ids } })
-      .select('_id status visibilidade autor_id publicada_em atualizada_em contadores.salvamentos votos_projecao_pendente votos_operacoes_pendentes salvamentos_projecao_pendente salvamentos_operacoes_pendentes')
+      .select(
+        '_id status visibilidade autor_id publicada_em atualizada_em contadores.salvamentos votos_projecao_pendente votos_operacoes_pendentes salvamentos_projecao_pendente salvamentos_operacoes_pendentes',
+      )
       .lean()
       .exec();
     if (stored.length !== cached.length) return null;
@@ -422,7 +489,8 @@ export class PublicacoesService {
         Boolean(current.votos_operacoes_pendentes?.length) ||
         Boolean(current.salvamentos_projecao_pendente) ||
         Boolean(current.salvamentos_operacoes_pendentes?.length) ||
-        (current.contadores?.salvamentos ?? 0) !== item.contadores.salvamentos ||
+        (current.contadores?.salvamentos ?? 0) !==
+          item.contadores.salvamentos ||
         current.autor_id.toString() !== item.autor.id ||
         (authorId && current.autor_id.toString() !== authorId) ||
         current.publicada_em?.getTime() !== item.publicadaEm.getTime() ||
@@ -454,7 +522,10 @@ export class PublicacoesService {
     return valid ? byAuthor : null;
   }
 
-  private toPublicationMedia(media: VerifiedMedia, ordem: number): PublicacaoMidia {
+  private toPublicationMedia(
+    media: VerifiedMedia,
+    ordem: number,
+  ): PublicacaoMidia {
     return {
       _id: new Types.ObjectId(),
       tipo: media.tipo,
@@ -471,15 +542,28 @@ export class PublicacoesService {
   }
 
   async update(id: string, authorId: string, body: UpdatePublicacaoDto) {
-    const filter = { _id: id, autor_id: new Types.ObjectId(authorId), status: 'publicada' as const };
+    const filter = {
+      _id: id,
+      autor_id: new Types.ObjectId(authorId),
+      status: 'publicada' as const,
+    };
     const changes: Record<string, unknown> = {};
     if (body.conteudo !== undefined) changes.conteudo = body.conteudo;
-    if (body.visibilidade !== undefined) changes.visibilidade = body.visibilidade;
-    if (body.conteudo !== undefined || body.stackIds !== undefined || body.midias !== undefined)
+    if (body.visibilidade !== undefined)
+      changes.visibilidade = body.visibilidade;
+    if (
+      body.conteudo !== undefined ||
+      body.stackIds !== undefined ||
+      body.midias !== undefined
+    )
       changes.editada_em = new Date();
-    if (body.stackIds !== undefined) changes.stacks = await this.resolveStacks(body.stackIds);
+    if (body.stackIds !== undefined)
+      changes.stacks = await this.resolveStacks(body.stackIds);
 
-    const references = body.midias?.flatMap((item) => 'referencia' in item ? [item.referencia] : []) ?? [];
+    const references =
+      body.midias?.flatMap((item) =>
+        'referencia' in item ? [item.referencia] : [],
+      ) ?? [];
     const publicationId = id.toLowerCase();
     let previousMediaIds: Types.ObjectId[] | undefined;
     let reservedReferences: string[] = [];
@@ -490,15 +574,24 @@ export class PublicacoesService {
         const current = await this.publicacoes.findOne(filter).exec();
         if (!current) throw new ApiException('PUBLICACAO_NOT_FOUND');
         previousMediaIds = current.midias.map((item) => item._id);
-        const existing = new Map(current.midias.map((item) => [item._id.toString(), item]));
+        const existing = new Map(
+          current.midias.map((item) => [item._id.toString(), item]),
+        );
         if (body.midias.some((item) => 'id' in item && !existing.has(item.id)))
           throw new ApiException('MEDIA_INVALID');
 
         const uploads = references.length
-          ? await this.mediaVerifier.resolveForPublication(authorId, references, publicationId, true)
+          ? await this.mediaVerifier.resolveForPublication(
+              authorId,
+              references,
+              publicationId,
+              true,
+            )
           : [];
         reservedReferences = uploads.map((item) => item.referencia);
-        const uploaded = new Map(uploads.map((item) => [item.referencia, item]));
+        const uploaded = new Map(
+          uploads.map((item) => [item.referencia, item]),
+        );
         const midias = body.midias.map((item, order) => {
           if ('referencia' in item) {
             const upload = uploaded.get(item.referencia);
@@ -507,44 +600,73 @@ export class PublicacoesService {
           }
           const media = existing.get(item.id)!;
           return {
-            _id: media._id, tipo: media.tipo, url: media.url,
-            chave_storage: media.chave_storage, mime_type: media.mime_type,
-            tamanho_bytes: media.tamanho_bytes, largura: media.largura,
-            altura: media.altura, duracao_segundos: media.duracao_segundos,
-            texto_alternativo: media.texto_alternativo, ordem: order,
+            _id: media._id,
+            tipo: media.tipo,
+            url: media.url,
+            chave_storage: media.chave_storage,
+            mime_type: media.mime_type,
+            tamanho_bytes: media.tamanho_bytes,
+            largura: media.largura,
+            altura: media.altura,
+            duracao_segundos: media.duracao_segundos,
+            texto_alternativo: media.texto_alternativo,
+            ordem: order,
           };
         });
-        if (!validPublicationMedia(midias)) throw new ApiException('MEDIA_INVALID');
+        if (!validPublicationMedia(midias))
+          throw new ApiException('MEDIA_INVALID');
         changes.midias = midias;
-        if (references.length) await this.mediaVerifier.confirmForPublication(publicationId, references);
+        if (references.length)
+          await this.mediaVerifier.confirmForPublication(
+            publicationId,
+            references,
+          );
       }
 
       writeStarted = true;
-      publication = await this.publicacoes.findOneAndUpdate(
-        {
-          ...filter,
-          ...(previousMediaIds ? { $expr: { $eq: ['$midias._id', previousMediaIds] } } : {}),
-        },
-        { $set: changes },
-        { new: true, runValidators: true },
-      ).exec();
+      publication = await this.publicacoes
+        .findOneAndUpdate(
+          {
+            ...filter,
+            ...(previousMediaIds
+              ? { $expr: { $eq: ['$midias._id', previousMediaIds] } }
+              : {}),
+          },
+          { $set: changes },
+          { new: true, runValidators: true },
+        )
+        .exec();
       if (!publication) {
         writeStarted = false;
-        throw new ApiException(previousMediaIds ? 'MEDIA_INVALID' : 'PUBLICACAO_NOT_FOUND');
+        throw new ApiException(
+          previousMediaIds ? 'MEDIA_INVALID' : 'PUBLICACAO_NOT_FOUND',
+        );
       }
     } catch (error) {
       if (!writeStarted && reservedReferences.length) {
-        await this.mediaVerifier.releaseForPublication(publicationId, reservedReferences, true).catch(() => undefined);
+        await this.mediaVerifier
+          .releaseForPublication(publicationId, reservedReferences, true)
+          .catch(() => undefined);
       }
       throw error;
     }
 
     if (references.length) {
-      await this.mediaVerifier.finalizeForPublication(publicationId, references).catch(() => undefined);
+      await this.mediaVerifier
+        .finalizeForPublication(publicationId, references)
+        .catch(() => undefined);
     }
     await this.cache.invalidate(id, authorId);
-    if (body.visibilidade !== undefined)
+    if (body.visibilidade !== undefined) {
       await this.creatorStats?.refresh(authorId).catch(() => undefined);
+      await this.votosStream
+        ?.publishAccessChange({
+          publicationId: id,
+          authorId,
+          visibility: publication.visibilidade,
+        })
+        .catch(() => undefined);
+    }
     const author = await this.usuarios
       .findById(authorId)
       .select('nome username biografia avatar_url visibilidade_perfil')
@@ -568,6 +690,13 @@ export class PublicacoesService {
     if (!publication) throw new ApiException('PUBLICACAO_NOT_FOUND');
     await this.cache.invalidate(id, authorId);
     await this.creatorStats?.refresh(authorId).catch(() => undefined);
+    await this.votosStream
+      ?.publishAccessChange({
+        publicationId: id,
+        authorId,
+        visibility: 'removida',
+      })
+      .catch(() => undefined);
     return null;
   }
 
@@ -609,7 +738,15 @@ export class PublicacoesService {
         avatarUrl: author.avatar_url ?? null,
       },
       conteudo: publication.conteudo,
-      stacks: (publication.stacks ?? []).map(({ id, slug, nome, categoria, iconeUrl }) => ({ id, slug, nome, categoria, iconeUrl })),
+      stacks: (publication.stacks ?? []).map(
+        ({ id, slug, nome, categoria, iconeUrl }) => ({
+          id,
+          slug,
+          nome,
+          categoria,
+          iconeUrl,
+        }),
+      ),
       midias: publication.midias.map((media) => ({
         id: media._id.toString(),
         tipo: media.tipo,

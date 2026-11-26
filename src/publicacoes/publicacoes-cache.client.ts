@@ -26,6 +26,7 @@ function ttl(value: string | undefined, fallback: number) {
 export class PublicacoesCacheClient implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PublicacoesCacheClient.name);
   private readonly client: ReturnType<typeof createClient> | null;
+  private readonly url: string | null;
   private warned = false;
   readonly prefix: string;
   readonly feedTtl: number;
@@ -61,11 +62,13 @@ export class PublicacoesCacheClient implements OnModuleInit, OnModuleDestroy {
       )
     ) {
       this.client = null;
+      this.url = null;
       if (enabled)
         this.logger.warn('Cache Redis desativado por configuração inválida.');
       return;
     }
     try {
+      this.url = url;
       this.client = createClient({
         url,
         disableOfflineQueue: true,
@@ -80,6 +83,7 @@ export class PublicacoesCacheClient implements OnModuleInit, OnModuleDestroy {
       });
     } catch {
       this.client = null;
+      this.url = null;
       this.logger.warn('Cache Redis desativado por configuração inválida.');
     }
   }
@@ -145,6 +149,35 @@ export class PublicacoesCacheClient implements OnModuleInit, OnModuleDestroy {
       );
     } catch {
       return false;
+    }
+  }
+
+  async publish(channel: string, payload: string): Promise<boolean> {
+    if (!this.client?.isReady) return false;
+    try {
+      await this.client
+        .withAbortSignal(AbortSignal.timeout(350))
+        .publish(channel, payload);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  createSubscriber() {
+    if (!this.url) return null;
+    try {
+      const subscriber = createClient({
+        url: this.url,
+        socket: {
+          connectTimeout: 1500,
+          reconnectStrategy: cacheReconnectDelay,
+        },
+      });
+      subscriber.on('error', () => this.warnUnavailable());
+      return subscriber;
+    } catch {
+      return null;
     }
   }
 
